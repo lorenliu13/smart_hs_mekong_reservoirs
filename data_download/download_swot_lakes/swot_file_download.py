@@ -50,21 +50,29 @@ def run_task(task):
     start_date = task['start_date']
     end_date = task['end_date']
 
+    print(f"\n[{start_date} → {end_date}] Starting task (PID {os.getpid()})")
+
     # get the year
     year = start_date[:4] # get the year from the start date
 
     download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/{year}"
     create_folder(download_folder)
 
-    swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/{start_date}_{end_date}_swot_lake_file_df.csv")
+    csv_path = fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/{start_date}_{end_date}_swot_lake_file_df.csv"
+    swot_file_df = pd.read_csv(csv_path)
+    total = swot_file_df.shape[0]
+    print(f"[{start_date} → {end_date}] {total} files to download → {download_folder}")
 
-    for index in range(swot_file_df.shape[0]):
+    for index in range(total):
         # extract the filename from the url
         curr_url = swot_file_df['url'].values[index]
         filename = os.path.basename(curr_url)
         save_file_path = download_folder + "/" + filename
 
+        print(f"[{start_date} → {end_date}] ({index + 1}/{total}) {filename}")
         download_url(save_file_path, curr_url, filename)
+
+    print(f"[{start_date} → {end_date}] Task complete.")
 
 
 if __name__ == "__main__":
@@ -93,15 +101,22 @@ if __name__ == "__main__":
         current_month += relativedelta(months=1)
     
     print(f"\nTotal months to process: {len(date_pairs)}")
-    
+    for s, e in date_pairs:
+        print(f"  {s} → {e}")
 
     process_num = 5 # number of processes
+    print(f"\nStarting download pool with {process_num} parallel processes...")
+
     # Loop through each month
     task_list = []
     for i, (start_date, end_date) in enumerate(date_pairs):
         task = {'start_date': start_date, 'end_date': end_date}
         task_list.append(task)
-    
+
     # use the process
     pool = mp.Pool(processes=process_num)
     pool.map(run_task, task_list)
+    pool.close()
+    pool.join()
+
+    print("\nAll tasks complete.")
