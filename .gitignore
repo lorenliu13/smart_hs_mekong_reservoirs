@@ -18,6 +18,8 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
+
 
 # Data files
 *.nc
