@@ -53,10 +53,10 @@ def run_task(task):
     # get the year
     year = start_date[:4] # get the year from the start date
 
-    download_folder = rf"E:\Project_2025_2026\Smart_hs\raw_data\swot\ba_river_watershed\swot_lake\{year}"
+    download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/{year}"
     create_folder(download_folder)
 
-    swot_file_df = pd.read_csv(fr"E:\Project_2025_2026\Smart_hs\raw_data\swot\ba_river_watershed\file_list/{start_date}_{end_date}_swot_lake_file_df.csv")
+    swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/{start_date}_{end_date}_swot_lake_file_df.csv")
 
     for index in range(swot_file_df.shape[0]):
         # extract the filename from the url
