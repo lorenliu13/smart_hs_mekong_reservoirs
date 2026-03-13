@@ -44,7 +44,9 @@ def swot_file_collection(start_date, end_date):
     # pass_names = ['062', '243', '271', '340', '368', '521', '549']
     # pass_names = ['062', '243', '549']
 
-    for pass_name in pass_names:
+    n_passes = len(pass_names)
+    for pass_idx, pass_name in enumerate(pass_names):
+        print(f"  [{start_date}] Pass {pass_name} ({pass_idx+1}/{n_passes}) — searching version C...")
         swot_results_version_c = earthaccess.search_data(
             # short_name='SWOT_L2_HR_RiverSP_reach_2.0',
             short_name='SWOT_L2_HR_LakeSP_2.0',
@@ -54,6 +56,7 @@ def swot_file_collection(start_date, end_date):
             granule_name=f'*Lake*_{pass_name}_AS*',
             count=-1
         )
+        print(f"  [{start_date}] Pass {pass_name} — version C: {len(swot_results_version_c)} granules. Searching version D...")
 
         # search for swot data with version D
         swot_results_version_d = earthaccess.search_data(
@@ -65,6 +68,7 @@ def swot_file_collection(start_date, end_date):
             granule_name=f'*Lake*_{pass_name}_AS*', # Change the region: NA, AS
             count=-1
         )
+        print(f"  [{start_date}] Pass {pass_name} — version D: {len(swot_results_version_d)} granules.")
 
         for swot_result in swot_results_version_c:
             
@@ -139,7 +143,9 @@ def swot_file_collection(start_date, end_date):
     # save it as a csv file
     # save_folder = r"E:\Project_2025_2026\Smart_hs\raw_data\swot\swot_reach\file_list\california"
     save_folder = r"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list"
-    swot_file_df.to_csv(os.path.join(save_folder, f'{start_date}_{end_date}_swot_lake_file_df.csv'), index=False)
+    out_path = os.path.join(save_folder, f'{start_date}_{end_date}_swot_lake_file_df.csv')
+    swot_file_df.to_csv(out_path, index=False)
+    print(f"[DONE] {start_date} → {end_date}: {len(swot_file_df)} total records saved to {out_path}")
 
 
 def run_task(task):
@@ -189,9 +195,11 @@ if __name__ == '__main__':
         task_list.append(task)
     
     # use the process
+    print(f"Starting pool with {process_num} processes...")
     pool = mp.Pool(processes=process_num)
     pool.map(run_task, task_list)
     pool.close()
     pool.join()
+    print("All tasks completed.")
 
 
