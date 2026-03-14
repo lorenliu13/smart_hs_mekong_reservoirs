@@ -52,9 +52,7 @@ INPUT_CSV = (
     "gritv06_reaches_mekong_basin_with_pld_lakes.csv"
 )
 OUTPUT_CSV = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/reaches/"
-    "lake_graph_with_upstream_downstream.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_pld_lake_graph.csv"
 )
 
 # ---------------------------------------------------------------------------

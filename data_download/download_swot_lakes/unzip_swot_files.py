@@ -27,12 +27,12 @@ def run_task(task):
 
     # download_folder = rf"/home/yliu2232/smart_hs/raw_data/swot/swot_reach/california/{year}"
     # download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/swot_node/sacramento/{year}"
-    download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes\{year}"
+    download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/{year}"
     create_folder(download_folder)
 
     # swot_file_df = pd.read_csv(fr"/home/yliu2232/smart_hs/raw_data/swot/swot_reach/california/file_list/{start_date}_{end_date}_swot_file_df.csv")
     # swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/swot_node/file_list/{start_date}_{end_date}_swot_node_file_df.csv")
-    swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list\{start_date}_{end_date}_swot_lake_file_df.csv")
+    swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/{start_date}_{end_date}_swot_lake_file_df.csv")
 
     total_files = swot_file_df.shape[0]
     print(f"  Found {total_files} files to unzip for {start_date} ~ {end_date}")
