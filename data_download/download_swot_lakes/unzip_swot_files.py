@@ -20,19 +20,24 @@ def run_task(task):
     start_date = task['start_date']
     end_date = task['end_date']
 
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Processing {start_date} to {end_date}")
+
     # get the year
     year = start_date[:4] # get the year from the start date
 
     # download_folder = rf"/home/yliu2232/smart_hs/raw_data/swot/swot_reach/california/{year}"
     # download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/swot_node/sacramento/{year}"
-    download_folder = rf"E:\Project_2025_2026\Smart_hs\raw_data\swot\ba_river_watershed\swot_lake\{year}"
+    download_folder = rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes\{year}"
     create_folder(download_folder)
 
     # swot_file_df = pd.read_csv(fr"/home/yliu2232/smart_hs/raw_data/swot/swot_reach/california/file_list/{start_date}_{end_date}_swot_file_df.csv")
     # swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/swot_node/file_list/{start_date}_{end_date}_swot_node_file_df.csv")
-    swot_file_df = pd.read_csv(fr"E:\Project_2025_2026\Smart_hs\raw_data\swot\ba_river_watershed\file_list\{start_date}_{end_date}_swot_lake_file_df.csv")
+    swot_file_df = pd.read_csv(fr"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list\{start_date}_{end_date}_swot_lake_file_df.csv")
 
-    for index in range(swot_file_df.shape[0]):
+    total_files = swot_file_df.shape[0]
+    print(f"  Found {total_files} files to unzip for {start_date} ~ {end_date}")
+
+    for index in range(total_files):
         # extract the filename from the url
         curr_url = swot_file_df['url'].values[index]
         filename = os.path.basename(curr_url)
@@ -41,8 +46,11 @@ def run_task(task):
         # unzip the file into a folder with the same name as the zip file
         unzip_folder_path = download_folder + "/" + filename[:-4]
         # unzip the file
+        print(f"  [{index+1}/{total_files}] Unzipping {filename}")
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(unzip_folder_path)
+
+    print(f"  Done: {start_date} ~ {end_date}")
 
 
 if __name__ == "__main__":
@@ -73,7 +81,7 @@ if __name__ == "__main__":
     print(f"\nTotal months to process: {len(date_pairs)}")
     
 
-    process_num = 4 # number of processes
+    process_num = 10 # number of processes
     # Loop through each month
     task_list = []
     for i, (start_date, end_date) in enumerate(date_pairs):
