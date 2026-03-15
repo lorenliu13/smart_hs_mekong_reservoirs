@@ -29,49 +29,89 @@ Key difference from a naive approach: steps 3 & 4 traverse the full river
 network rather than only checking the immediately adjacent reach. This correctly
 handles cases where two lakes are separated by one or more plain river reaches.
 
+Only lakes with ref_area > LAKE_AREA_THRESHOLD_SQKM (from the SWOT PLD) are
+analysed. The threshold is embedded in the output filename.
+
+A terminal node (lake_id = -1) representing the most-downstream river reach(es)
+of the basin is appended to the graph, allowing lakes that drain directly to the
+sea / dataset boundary to have an explicit downstream target.
+
 Input:  gritv06_reaches_mekong_basin_with_pld_lakes.csv
         Columns used: fid, upstream_l, downstre_1, lake_id
 
-Output: lake_graph_with_upstream_downstream.csv
+        swot_prior_lake_database_mekong_overlap_with_grit.shp
+        Columns used: lake_id, ref_area
+
+Output: gritv06_pld_lake_graph_{threshold}sqkm.csv
         Columns:
-          lake_id             - unique lake ID (int64)
-          most_downstream_fid - fid of the most downstream GRIT reach in this lake
-          upstream_lake_ids   - comma-separated upstream lake IDs (empty if none)
-          downstream_lake_id  - downstream lake ID (empty if none / outlet to sea)
+          lake_id              - unique lake ID (-1 = terminal river node)
+          most_downstream_fid  - fid of the most downstream reach for this node
+          downstream_river_fid - fid(s) of the first non-lake reach(es) downstream
+                                 of the lake exit (empty for the terminal node)
+          upstream_lake_ids    - comma-separated upstream lake IDs (empty if none)
+          downstream_lake_ids  - downstream lake ID(s); -1 means basin outlet
 """
 
 import pandas as pd
+import geopandas as gpd
 from collections import defaultdict
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+LAKE_AREA_THRESHOLD_SQKM = 1   # Only analyse lakes with ref_area > this value (sq km)
+TERMINAL_NODE_ID = -1            # Sentinel lake_id for the most-downstream river node
+OUTLET_REACH_FID = 330187369     # Explicitly specified main-stem river outlet reach.
+                                 # Overrides auto-detection (which picks up isolated
+                                 # sub-networks without a downstream connection).
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+PLD_PATH = (
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
+    r"\GRIT_mekong_mega_reservoirs\prior_lake_database"
+    r"\swot_prior_lake_database_mekong_overlap_with_grit.shp"
+)
 INPUT_CSV = (
     "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
     "GRIT_mekong_mega_reservoirs/reaches/"
     "gritv06_reaches_mekong_basin_with_pld_lakes.csv"
 )
 OUTPUT_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_pld_lake_graph.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 
 # ---------------------------------------------------------------------------
-# Load data
+# 1. Load PLD and filter by area threshold
+# ---------------------------------------------------------------------------
+pld = gpd.read_file(PLD_PATH)
+valid_lake_ids: set[int] = set(
+    pld.loc[pld["ref_area"] > LAKE_AREA_THRESHOLD_SQKM, "lake_id"].astype("int64")
+)
+print(
+    f"PLD lakes total: {len(pld)}, "
+    f"after ref_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
+)
+
+# ---------------------------------------------------------------------------
+# 2. Load reach data
 # ---------------------------------------------------------------------------
 df = pd.read_csv(INPUT_CSV)
 print(f"Total rows: {len(df)},  Lake rows: {df['lake_id'].notna().sum()}")
 
-# Keep only rows that belong to a lake (drop plain river reaches)
+# Keep only lake reaches that belong to the area-filtered lakes
 lake_df = df[df["lake_id"].notna()].copy()
-
-# lake_id is stored as float64 in the CSV (e.g. 4420000122.0).
-# Use int64 explicitly — these values exceed the int32 range (max ~2.1 billion)
-# so plain astype(int) would silently overflow on some systems.
 lake_df["lake_id"] = lake_df["lake_id"].astype("int64")
-
+lake_df = lake_df[lake_df["lake_id"].isin(valid_lake_ids)].copy()
+print(
+    f"Lake rows after area filter: {len(lake_df)}, "
+    f"unique lakes: {lake_df['lake_id'].nunique()}"
+)
 
 # ---------------------------------------------------------------------------
-# Helper: parse connectivity cells
+# 3. Helper: parse connectivity cells
 # ---------------------------------------------------------------------------
 def parse_ids(value) -> list[int]:
     """
@@ -88,7 +128,7 @@ def parse_ids(value) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# Build helper lookups — built from ALL reaches, not just lake reaches.
+# 4. Build helper lookups — built from ALL reaches, not just lake reaches.
 # This is essential for the traversal in steps 3 & 4: when following the
 # river network downstream (or upstream) from a lake's exit (or entry) point,
 # we pass through plain river reaches that have no lake_id. Without lookups
@@ -104,16 +144,46 @@ all_fid_to_up: dict[int, list[int]] = dict(zip(df["fid"], df["_up_ids"]))
 # ALL reaches: fid → list of downstream fids
 all_fid_to_dn: dict[int, list[int]] = dict(zip(df["fid"], df["_dn_ids"]))
 
-# Mapping: reach fid → lake_id  (lake reaches only)
-# Used to check "does a reach belong to a lake, and which one?"
+# Mapping: reach fid → lake_id  (FILTERED lake reaches only)
+# Used to check "does a reach belong to a (filtered) lake, and which one?"
 reach_to_lake: dict[int, int] = dict(
     zip(lake_df["fid"], lake_df["lake_id"])
 )
 
+# ---------------------------------------------------------------------------
+# 5. Set the terminal river reach and inject it into reach_to_lake
+#    with TERMINAL_NODE_ID so BFS traversal naturally "finds" the basin outlet.
+#
+#    OUTLET_REACH_FID is set explicitly to avoid picking up isolated reaches
+#    (sub-networks with no downstream neighbour that are not the main outlet).
+# ---------------------------------------------------------------------------
+if OUTLET_REACH_FID not in df["fid"].values:
+    raise ValueError(
+        f"OUTLET_REACH_FID {OUTLET_REACH_FID} not found in the reach dataset. "
+        "Check the fid value or update OUTLET_REACH_FID in the parameters block."
+    )
+
+terminal_fids: list[int] = [OUTLET_REACH_FID]
+print(f"Terminal river reach (basin outlet): fid={OUTLET_REACH_FID}")
+
+for fid in terminal_fids:
+    reach_to_lake[fid] = TERMINAL_NODE_ID
+
+# Set of reach fids that belong to a real (non-terminal) lake — used to
+# identify the first river reach immediately downstream of each lake exit.
+lake_reach_fids_set: set[int] = {
+    fid for fid, lid in reach_to_lake.items() if lid != TERMINAL_NODE_ID
+}
+
+# ---------------------------------------------------------------------------
+# 6. Build lake-level lookups (filtered lakes only; terminal excluded)
+# ---------------------------------------------------------------------------
+
 # Mapping: lake_id → set of reach fids  (inverted from reach_to_lake)
 lake_to_reaches: dict[int, set[int]] = defaultdict(set)
 for fid, lake in reach_to_lake.items():
-    lake_to_reaches[lake].add(fid)
+    if lake != TERMINAL_NODE_ID:
+        lake_to_reaches[lake].add(fid)
 
 # Convenience lookups restricted to lake reaches (used inside the lake for
 # finding exit reaches and the upstream-count tie-breaker)
@@ -124,7 +194,7 @@ fid_to_dn: dict[int, list[int]] = dict(zip(lake_df["fid"], lake_df["_dn_ids"]))
 
 
 # ---------------------------------------------------------------------------
-# Traversal helpers
+# 7. Traversal helpers
 # ---------------------------------------------------------------------------
 def find_downstream_lakes(
     start_fids: list[int],
@@ -135,6 +205,9 @@ def find_downstream_lakes(
     """
     BFS downstream from `start_fids` through plain river reaches until ALL
     reachable downstream lakes are found. Returns a SET of lake IDs.
+
+    Terminal reaches (reach_to_lake value == TERMINAL_NODE_ID) are treated as
+    lake nodes so BFS stops there and returns TERMINAL_NODE_ID in the result set.
 
     Unlike a single-return version, this collects every downstream lake across
     all branches so that bifurcating rivers (deltas) produce multiple results.
@@ -153,11 +226,11 @@ def find_downstream_lakes(
         visited.add(fid)
         lake = reach_to_lake.get(fid)
         if lake is not None and lake != this_lake_id:
-            downstream_lakes.add(lake)  # found a downstream lake — stop this branch
+            downstream_lakes.add(lake)  # found a downstream lake (or terminal) — stop this branch
         elif lake is None:
             # Plain river reach — keep following all downstream branches
             queue.extend(all_fid_to_dn.get(fid, []))
-    return downstream_lakes  # empty = reached sea / dataset boundary
+    return downstream_lakes  # empty = reached sea / dataset boundary with no terminal reach
 
 
 def find_upstream_lakes(
@@ -196,7 +269,7 @@ def find_upstream_lakes(
 
 
 # ---------------------------------------------------------------------------
-# Main loop: for each lake find most-downstream reach, upstream/downstream lakes
+# 8. Main loop: for each lake find most-downstream reach, upstream/downstream
 # ---------------------------------------------------------------------------
 records = []
 
@@ -213,7 +286,7 @@ for lake_id, reaches in lake_to_reaches.items():
         if not dn_ids or all(d not in reaches for d in dn_ids):
             exit_reaches.append(fid)
 
-    # ---- Step 2: pick ONE most-downstream reach ------------------------------
+    # ---- Step 2: pick ONE most-downstream lake reach -------------------------
     if len(exit_reaches) == 1:
         # Normal case — one unambiguous exit.
         most_downstream_fid = exit_reaches[0]
@@ -243,7 +316,17 @@ for lake_id, reaches in lake_to_reaches.items():
 
         most_downstream_fid = max(exit_reaches, key=_upstream_count)
 
-    # ---- Step 3: identify downstream lakes ------------------------------------
+    # ---- Step 3: identify immediate downstream river reach(es) ---------------
+    # The first non-lake reach(es) immediately after the lake exit.
+    # These are the connection reaches between this lake and the next
+    # lake / terminal node in the network.
+    downstream_river_fids: list[int] = []
+    for exit_fid in exit_reaches:
+        for dn in all_fid_to_dn.get(exit_fid, []):
+            if dn not in lake_reach_fids_set:   # river reach or terminal reach
+                downstream_river_fids.append(dn)
+
+    # ---- Step 4: identify downstream lakes (includes TERMINAL_NODE_ID) -------
     # Start from the downstream neighbours of ALL exit reaches so that
     # bifurcating channels each get explored and can lead to different lakes.
     all_exit_dn_fids = [
@@ -253,7 +336,7 @@ for lake_id, reaches in lake_to_reaches.items():
         all_exit_dn_fids, lake_id, all_fid_to_dn, reach_to_lake
     )
 
-    # ---- Step 4: identify upstream lakes -------------------------------------
+    # ---- Step 5: identify upstream lakes -------------------------------------
     # Collect all upstream neighbours of lake reaches that lie OUTSIDE this
     # lake — these are the entry points where water flows into the lake from
     # the surrounding river network. Then traverse upstream from each entry
@@ -273,22 +356,63 @@ for lake_id, reaches in lake_to_reaches.items():
         {
             "lake_id": lake_id,
             "most_downstream_fid": most_downstream_fid,
+            # Comma-separated fids of the first river reach(es) downstream of exit
+            "downstream_river_fid": ",".join(
+                str(x) for x in sorted(set(downstream_river_fids))
+            ),
             # Sort for deterministic output; empty string means no upstream lakes
             "upstream_lake_ids": ",".join(str(x) for x in sorted(upstream_lake_ids)),
-            # Sort for deterministic output; empty string means no downstream lakes
-            "downstream_lake_ids": ",".join(str(x) for x in sorted(downstream_lake_ids)),
+            # Sort for deterministic output; -1 means basin outlet (terminal node)
+            "downstream_lake_ids": ",".join(
+                str(x) for x in sorted(downstream_lake_ids)
+            ),
         }
     )
 
 # ---------------------------------------------------------------------------
-# Build output dataframe and save
+# 9. Add terminal node (most-downstream river reach) to the graph
+#    lake_id = TERMINAL_NODE_ID (-1); upstream = all filtered lakes that drain
+#    directly to the basin outlet.
+# ---------------------------------------------------------------------------
+if terminal_fids:
+    terminal_upstream_lakes = find_upstream_lakes(
+        terminal_fids,
+        set(terminal_fids),   # exclude terminal fids themselves from traversal
+        all_fid_to_up,
+        reach_to_lake,
+    )
+    # Remove the terminal sentinel itself in case it crept in
+    terminal_upstream_lakes.discard(TERMINAL_NODE_ID)
+    # Keep only filtered lakes (upstream traversal may reach unfiltered lakes)
+    terminal_upstream_lakes &= valid_lake_ids
+
+    records.append(
+        {
+            "lake_id": TERMINAL_NODE_ID,
+            # Store all terminal reach fids (comma-separated if multiple branches)
+            "most_downstream_fid": ",".join(str(x) for x in sorted(terminal_fids)),
+            "downstream_river_fid": "",        # no river reach further downstream
+            "upstream_lake_ids": ",".join(
+                str(x) for x in sorted(terminal_upstream_lakes)
+            ),
+            "downstream_lake_ids": "",         # basin outlet — nothing downstream
+        }
+    )
+    print(
+        f"Terminal node added: {len(terminal_fids)} outlet reach(es), "
+        f"{len(terminal_upstream_lakes)} directly upstream lake(s)"
+    )
+
+# ---------------------------------------------------------------------------
+# 10. Build output dataframe and save
 # ---------------------------------------------------------------------------
 result_df = pd.DataFrame(records).sort_values("lake_id").reset_index(drop=True)
 
 print(f"\nResult shape: {result_df.shape}")
 print(result_df.head(10).to_string())
-print(f"\nLakes with upstream lake(s):  {(result_df['upstream_lake_ids'] != '').sum()}")
+print(f"\nLakes with upstream lake(s):   {(result_df['upstream_lake_ids'] != '').sum()}")
 print(f"Lakes with downstream lake(s): {(result_df['downstream_lake_ids'] != '').sum()}")
+print(f"Lakes draining to terminal:    {result_df['downstream_lake_ids'].str.contains(str(TERMINAL_NODE_ID), na=False).sum()}")
 
 result_df.to_csv(OUTPUT_CSV, index=False)
 print(f"\nSaved to: {OUTPUT_CSV}")
