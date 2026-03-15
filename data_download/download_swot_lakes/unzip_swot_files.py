@@ -49,6 +49,9 @@ def run_task(task):
         if not os.path.exists(zip_file_path):
             print(f"  [{index+1}/{total_files}] SKIPPED (missing): {filename}")
             continue
+        if os.path.exists(unzip_folder_path):
+            print(f"  [{index+1}/{total_files}] SKIPPED (already unzipped): {filename}")
+            continue
         print(f"  [{index+1}/{total_files}] Unzipping {filename}")
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(unzip_folder_path)
