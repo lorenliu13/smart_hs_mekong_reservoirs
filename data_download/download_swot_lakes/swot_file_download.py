@@ -69,7 +69,10 @@ def run_task(task):
         filename = os.path.basename(curr_url)
         save_file_path = download_folder + "/" + filename
 
-        print(f"[{start_date} → {end_date}] ({index + 1}/{total}) {filename}")
+        if os.path.exists(save_file_path):
+            print(f"[{start_date} → {end_date}] ({index + 1}/{total}) SKIPPED (already exists): {filename}")
+            continue
+        print(f"[{start_date} → {end_date}] ({index + 1}/{total}) Downloading: {filename}")
         download_url(save_file_path, curr_url, filename)
 
     print(f"[{start_date} → {end_date}] Task complete.")
