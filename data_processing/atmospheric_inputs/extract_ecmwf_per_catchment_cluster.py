@@ -83,32 +83,32 @@ LAKE_CENTROIDS_CSV = (
 OUTPUT_DIR = Path(rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs/hres/ecmwf_ifs_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm")
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
-START_YEAR  = 2024
+START_YEAR  = 2023
 START_MONTH = 1
-END_YEAR    = 2024
-END_MONTH   = 1
+END_YEAR    = 2025
+END_MONTH   = 12
 N_DAYS      = 10     # number of forecast days to extract per init date
 OVERWRITE   = False  # set True to reprocess init dates that already have a CSV
-N_WORKERS   = 10     # number of parallel worker processes (match --cpus-per-task in sbatch)
+N_WORKERS   = 20     # number of parallel worker processes (match --cpus-per-task in sbatch)
 
 # ---------------------------------------------------------------------------
 # Variable metadata
 # ---------------------------------------------------------------------------
 VAR_META = {
     "tp"    : ("tp",    "accum", "m"),
-    # "2t"    : ("t2m",   "inst",  "K"),
-    # "2d"    : ("d2m",   "inst",  "K"),
-    # "sp"    : ("sp",    "inst",  "Pa"),
-    # "10u"   : ("u10",   "inst",  "m/s"),
-    # "10v"   : ("v10",   "inst",  "m/s"),
-    # "ssrd"  : ("ssrd",  "accum", "J/m2"),
-    # "strd"  : ("strd",  "accum", "J/m2"),
-    # "sf"    : ("sf",    "accum", "m"),
-    # "sd"    : ("sd",    "inst",  "m"),
-    # "swvl1" : ("swvl1", "inst",  "m3/m3"),
-    # "swvl2" : ("swvl2", "inst",  "m3/m3"),
-    # "swvl3" : ("swvl3", "inst",  "m3/m3"),
-    # "swvl4" : ("swvl4", "inst",  "m3/m3"),
+    "2t"    : ("t2m",   "inst",  "K"),
+    "2d"    : ("d2m",   "inst",  "K"),
+    "sp"    : ("sp",    "inst",  "Pa"),
+    "10u"   : ("u10",   "inst",  "m/s"),
+    "10v"   : ("v10",   "inst",  "m/s"),
+    "ssrd"  : ("ssrd",  "accum", "J/m2"),
+    "strd"  : ("strd",  "accum", "J/m2"),
+    "sf"    : ("sf",    "accum", "m"),
+    "sd"    : ("sd",    "inst",  "m"),
+    "swvl1" : ("swvl1", "inst",  "m3/m3"),
+    "swvl2" : ("swvl2", "inst",  "m3/m3"),
+    "swvl3" : ("swvl3", "inst",  "m3/m3"),
+    "swvl4" : ("swvl4", "inst",  "m3/m3"),
 }
 
 ACCUM_VARS = {v for v, meta in VAR_META.items() if meta[1] == "accum"}
