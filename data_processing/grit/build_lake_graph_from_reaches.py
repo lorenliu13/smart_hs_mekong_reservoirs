@@ -59,7 +59,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 1   # Only analyse lakes with ref_area > this value (sq km)
+LAKE_AREA_THRESHOLD_SQKM = 5   # Only analyse lakes with ref_area > this value (sq km)
 TERMINAL_NODE_ID = -1            # Sentinel lake_id for the most-downstream river node
 OUTLET_REACH_FID = 330187369     # Explicitly specified main-stem river outlet reach.
                                  # Overrides auto-detection (which picks up isolated
@@ -82,17 +82,39 @@ OUTPUT_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
     rf"\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
+SWOT_QC_CSV = (
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
+    r"\swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv"
+)
 
 # ---------------------------------------------------------------------------
-# 1. Load PLD and filter by area threshold
+# 1. Load PLD and filter by area threshold, then intersect with SWOT QC lakes
 # ---------------------------------------------------------------------------
 pld = gpd.read_file(PLD_PATH)
 valid_lake_ids: set[int] = set(
     pld.loc[pld["ref_area"] > LAKE_AREA_THRESHOLD_SQKM, "lake_id"].astype("int64")
 )
+
+# Build lake_id → (lon, lat) lookup from PLD centroid attributes
+pld["lake_id"] = pld["lake_id"].astype("int64")
+lake_lonlat: dict[int, tuple[float, float]] = (
+    pld.drop_duplicates("lake_id")
+    .set_index("lake_id")[["lon", "lat"]]
+    .apply(lambda r: (float(r["lon"]), float(r["lat"])), axis=1)
+    .to_dict()
+)
 print(
     f"PLD lakes total: {len(pld)}, "
     f"after ref_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
+)
+
+# Keep only lakes that have WSE observations in the SWOT QC file
+swot_qc = pd.read_csv(SWOT_QC_CSV, usecols=["lake_id"])
+swot_lake_ids: set[int] = set(swot_qc["lake_id"].astype("int64").unique())
+valid_lake_ids &= swot_lake_ids
+print(
+    f"SWOT QC lakes with WSE: {len(swot_lake_ids)}, "
+    f"after intersecting with area filter: {len(valid_lake_ids)}"
 )
 
 # ---------------------------------------------------------------------------
@@ -352,9 +374,12 @@ for lake_id, reaches in lake_to_reaches.items():
     )
 
     # ---- Collect result for this lake ----------------------------------------
+    lon, lat = lake_lonlat.get(lake_id, (None, None))
     records.append(
         {
             "lake_id": lake_id,
+            "lon": lon,
+            "lat": lat,
             "most_downstream_fid": most_downstream_fid,
             # Comma-separated fids of the first river reach(es) downstream of exit
             "downstream_river_fid": ",".join(
@@ -389,6 +414,8 @@ if terminal_fids:
     records.append(
         {
             "lake_id": TERMINAL_NODE_ID,
+            "lon": None,
+            "lat": None,
             # Store all terminal reach fids (comma-separated if multiple branches)
             "most_downstream_fid": ",".join(str(x) for x in sorted(terminal_fids)),
             "downstream_river_fid": "",        # no river reach further downstream

@@ -30,7 +30,7 @@ from shapely.geometry import LineString, Point
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 1   # Must match the value used in build_lake_graph_from_reaches.py
+LAKE_AREA_THRESHOLD_SQKM = 5   # Must match the value used in build_lake_graph_from_reaches.py
 TERMINAL_NODE_ID = -1
 
 # ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ pld["lake_id"] = pld["lake_id"].astype("int64")
 # Each physical lake may appear as multiple sub-polygons in PLD.
 # Dissolve them into a single multi-polygon per lake_id so we get one centroid.
 pld_dissolved = (
-    pld[["lake_id", "names", "poly_area", "ref_area", "geometry"]]
-    .dissolve(by="lake_id", aggfunc={"names": "first", "poly_area": "sum", "ref_area": "first"})
+    pld[["lake_id", "names", "poly_area", "ref_area", "lon", "lat", "geometry"]]
+    .dissolve(by="lake_id", aggfunc={"names": "first", "poly_area": "sum", "ref_area": "first", "lon": "first", "lat": "first"})
     .reset_index()
 )
 # Project to metric CRS for accurate centroid computation, then convert back
@@ -134,7 +134,7 @@ print(f"PLD unique lake_ids after dissolve: {len(pld_dissolved)}")
 # The terminal node (lake_id = -1) has no PLD entry → centroid will be null
 # until we inject the reach-derived geometry below.
 nodes_df = graph.merge(
-    pld_dissolved[["lake_id", "names", "poly_area", "ref_area", "centroid"]],
+    pld_dissolved[["lake_id", "names", "poly_area", "ref_area", "lon", "lat", "centroid"]],
     on="lake_id",
     how="left",
 )
@@ -148,10 +148,12 @@ nodes_gdf = gpd.GeoDataFrame(
     crs="EPSG:4326",
 )
 
-# Inject terminal node geometry derived from the reaches shapefile
+# Inject terminal node geometry and lon/lat derived from the reaches shapefile
 if terminal_centroid is not None:
     mask = nodes_gdf["lake_id"] == TERMINAL_NODE_ID
     nodes_gdf.loc[mask, "geometry"] = terminal_centroid
+    nodes_gdf.loc[mask, "lon"] = terminal_centroid.x
+    nodes_gdf.loc[mask, "lat"] = terminal_centroid.y
 
 missing_geom = nodes_gdf.geometry.isna().sum()
 if missing_geom:

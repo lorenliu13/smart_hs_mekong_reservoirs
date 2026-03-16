@@ -65,13 +65,14 @@ Output:
     n_all_segments            - total count
 """
 
+import geopandas as gpd
 import pandas as pd
 from collections import defaultdict
 
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 1   # Must match the lake graph that was produced
+LAKE_AREA_THRESHOLD_SQKM = 5   # Must match the lake graph that was produced
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -91,10 +92,15 @@ LAKE_GRAPH_CSV = (
     "GRIT_mekong_mega_reservoirs/reservoirs/"
     f"gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
+PLD_SHP = (
+    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
+    "GRIT_mekong_mega_reservoirs/prior_lake_database/"
+    "swot_prior_lake_database_mekong_overlap_with_grit.shp"
+)
 OUTPUT_CSV = (
     "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
     "GRIT_mekong_mega_reservoirs/reservoirs/"
-    f"gritv06_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    f"gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 
 # ---------------------------------------------------------------------------
@@ -105,6 +111,20 @@ valid_lake_ids: set[int] = set(
     lake_graph.loc[lake_graph["lake_id"] != -1, "lake_id"].astype("int64")
 )
 print(f"Valid lakes from graph: {len(valid_lake_ids)}")
+
+# ---------------------------------------------------------------------------
+# Load PLD shapefile to build lake centroid lon/lat lookup
+# ---------------------------------------------------------------------------
+pld = gpd.read_file(PLD_SHP)
+pld["lake_id"] = pld["lake_id"].astype("int64")
+# Keep first occurrence per lake_id (lon/lat are the same for all sub-polygons)
+lake_lonlat: dict[int, tuple[float, float]] = (
+    pld.drop_duplicates("lake_id")
+    .set_index("lake_id")[["lon", "lat"]]
+    .apply(lambda r: (float(r["lon"]), float(r["lat"])), axis=1)
+    .to_dict()
+)
+print(f"Lon/lat loaded for {len(lake_lonlat)} lakes")
 
 # ---------------------------------------------------------------------------
 # 2. Build segment → lake mapping from reach data
@@ -203,9 +223,12 @@ for lake_id in sorted(valid_lake_ids):
 
     all_segs: set[int] = own_segs | upstream_river_segs
 
+    lon, lat = lake_lonlat.get(lake_id, (None, None))
     records.append(
         {
             "lake_id": lake_id,
+            "lon": lon,
+            "lat": lat,
             "lake_segments": ",".join(str(s) for s in sorted(own_segs)),
             "upstream_river_segments": ",".join(
                 str(s) for s in sorted(upstream_river_segs)
