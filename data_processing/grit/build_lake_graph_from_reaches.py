@@ -29,7 +29,7 @@ Key difference from a naive approach: steps 3 & 4 traverse the full river
 network rather than only checking the immediately adjacent reach. This correctly
 handles cases where two lakes are separated by one or more plain river reaches.
 
-Only lakes with ref_area > LAKE_AREA_THRESHOLD_SQKM (from the SWOT PLD) are
+Only lakes with poly_area > LAKE_AREA_THRESHOLD_SQKM (from the SWOT PLD) are
 analysed. The threshold is embedded in the output filename.
 
 A terminal node (lake_id = -1) representing the most-downstream river reach(es)
@@ -40,7 +40,7 @@ Input:  gritv06_reaches_mekong_basin_with_pld_lakes.csv
         Columns used: fid, upstream_l, downstre_1, lake_id
 
         swot_prior_lake_database_mekong_overlap_with_grit.shp
-        Columns used: lake_id, ref_area
+        Columns used: lake_id, poly_area
 
 Output: gritv06_pld_lake_graph_{threshold}sqkm.csv
         Columns:
@@ -59,7 +59,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 5   # Only analyse lakes with ref_area > this value (sq km)
+LAKE_AREA_THRESHOLD_SQKM = 5   # Only analyse lakes with poly_area > this value (sq km)
 TERMINAL_NODE_ID = -1            # Sentinel lake_id for the most-downstream river node
 OUTLET_REACH_FID = 330187369     # Explicitly specified main-stem river outlet reach.
                                  # Overrides auto-detection (which picks up isolated
@@ -92,7 +92,7 @@ SWOT_QC_CSV = (
 # ---------------------------------------------------------------------------
 pld = gpd.read_file(PLD_PATH)
 valid_lake_ids: set[int] = set(
-    pld.loc[pld["ref_area"] > LAKE_AREA_THRESHOLD_SQKM, "lake_id"].astype("int64")
+    pld.loc[pld["poly_area"] > LAKE_AREA_THRESHOLD_SQKM, "lake_id"].astype("int64")
 )
 
 # Build lake_id → (lon, lat) lookup from PLD centroid attributes
@@ -105,7 +105,7 @@ lake_lonlat: dict[int, tuple[float, float]] = (
 )
 print(
     f"PLD lakes total: {len(pld)}, "
-    f"after ref_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
+    f"after poly_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
 )
 
 # Keep only lakes that have WSE observations in the SWOT QC file

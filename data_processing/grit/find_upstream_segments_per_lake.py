@@ -32,8 +32,8 @@ isolated sub-networks, are unassigned).
 ALGORITHM
 ---------
 1. Load reaches → derive (segment_id → lake_id) mapping.
-   If a segment straddles two lakes, assign it to the lake with the most
-   reaches in that segment.
+   If a segment straddles two lakes, assign it to all lakes that have
+   reaches in that segment (boundary segments are shared).
 
 2. Build the segment-level directed graph from the segments CSV.
 
@@ -72,7 +72,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 5   # Must match the lake graph that was produced
+LAKE_AREA_THRESHOLD_SQKM = 0   # Must match the lake graph that was produced
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -141,26 +141,21 @@ print(
     f"unique segments touched: {lake_reaches['segment_id'].nunique()}"
 )
 
-# Count how many reaches each (segment, lake) pair has, then keep the lake
-# with the highest count for each segment (resolves rare boundary segments).
+# Count how many reaches each (segment, lake) pair has.
+# Boundary segments shared between lakes are assigned to ALL lakes that have
+# reaches in that segment.
 seg_lake_counts = (
     lake_reaches.groupby(["segment_id", "lake_id"])
     .size()
     .reset_index(name="n_reaches")
 )
-best_idx = seg_lake_counts.groupby("segment_id")["n_reaches"].idxmax()
-seg_to_lake: dict[int, int] = (
-    seg_lake_counts.loc[best_idx]
-    .set_index("segment_id")["lake_id"]
-    .to_dict()
-)
 
-# Inverse: lake_id → set of segment fids that ARE the lake body
+# lake_id → set of segment fids that ARE the lake body (including shared boundary segments)
 lake_to_own_segs: dict[int, set[int]] = defaultdict(set)
-for seg, lake in seg_to_lake.items():
-    lake_to_own_segs[lake].add(seg)
+for _, row in seg_lake_counts.iterrows():
+    lake_to_own_segs[int(row["lake_id"])].add(int(row["segment_id"]))
 
-all_lake_seg_ids: set[int] = set(seg_to_lake.keys())
+all_lake_seg_ids: set[int] = set(seg_lake_counts["segment_id"].astype("int64"))
 print(f"Segments assigned to a lake: {len(all_lake_seg_ids)}")
 
 # ---------------------------------------------------------------------------

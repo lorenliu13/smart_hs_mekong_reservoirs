@@ -84,27 +84,24 @@ LAKE_AREA_THRESHOLD_SQKM = 0
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\era5_land")
 CATCHMENT_SHP = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
+    r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
+    rf"/gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
 )
 LAKE_CENTROIDS_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
+    rf"/gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 OUTPUT_DIR = Path(
-    rf"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs"
-    rf"\era5_land\era5land_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    Path(rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land/era5land_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm")
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
-START_YEAR  = 2024
+START_YEAR  = 2023
 START_MONTH = 1
-END_YEAR    = 2024
-END_MONTH   = 1
+END_YEAR    = 2025
+END_MONTH   = 12
 OVERWRITE   = False  # set True to reprocess months that already have a CSV
-N_WORKERS   = 8      # number of parallel worker processes
+N_WORKERS   = 20      # number of parallel worker processes
 
 # ---------------------------------------------------------------------------
 # Variable metadata
@@ -115,19 +112,19 @@ N_WORKERS   = 8      # number of parallel worker processes
 #   unit      : native ERA5-Land unit (kept as-is in output)
 VAR_META = {
     "tp"    : ("tp",    "accum", "m"),
-    # "2t"    : ("t2m",   "inst",  "K"),
-    # "2d"    : ("d2m",   "inst",  "K"),
-    # "sp"    : ("sp",    "inst",  "Pa"),
-    # "10u"   : ("u10",   "inst",  "m/s"),
-    # "10v"   : ("v10",   "inst",  "m/s"),
-    # "ssrd"  : ("ssrd",  "accum", "J/m2"),
-    # "strd"  : ("strd",  "accum", "J/m2"),
-    # "sf"    : ("sf",    "accum", "m"),
-    # "sd"    : ("sd",    "inst",  "m"),
-    # "swvl1" : ("swvl1", "inst",  "m3/m3"),
-    # "swvl2" : ("swvl2", "inst",  "m3/m3"),
-    # "swvl3" : ("swvl3", "inst",  "m3/m3"),
-    # "swvl4" : ("swvl4", "inst",  "m3/m3"),
+    "2t"    : ("t2m",   "inst",  "K"),
+    "2d"    : ("d2m",   "inst",  "K"),
+    "sp"    : ("sp",    "inst",  "Pa"),
+    "10u"   : ("u10",   "inst",  "m/s"),
+    "10v"   : ("v10",   "inst",  "m/s"),
+    "ssrd"  : ("ssrd",  "accum", "J/m2"),
+    "strd"  : ("strd",  "accum", "J/m2"),
+    "sf"    : ("sf",    "accum", "m"),
+    "sd"    : ("sd",    "inst",  "m"),
+    "swvl1" : ("swvl1", "inst",  "m3/m3"),
+    "swvl2" : ("swvl2", "inst",  "m3/m3"),
+    "swvl3" : ("swvl3", "inst",  "m3/m3"),
+    "swvl4" : ("swvl4", "inst",  "m3/m3"),
 }
 
 ACCUM_VARS = {v for v, meta in VAR_META.items() if meta[1] == "accum"}
@@ -218,25 +215,7 @@ def compute_daily_fields(
     """
     # Convert Unix timestamps to pandas DatetimeIndex for easy grouping
     times_dt = pd.to_datetime(valid_times, unit="s", utc=True)
-
-    # ERA5-Land tp timestamps mark the END of each 1-hour accumulation interval
-    # (e.g. valid_time 01:00 UTC = rain 00:00–01:00 UTC;
-    #        valid_time 00:00 UTC = rain 23:00–00:00 UTC → belongs to PREVIOUS day).
-    #
-    # Convention: day D = 00:00 UTC day D → 00:00 UTC day D+1.
-    #
-    # For accumulated vars: assign each hourly value to the day its interval
-    # *started* by shifting the timestamp back 1 hour before extracting the date.
-    # This means valid_time 00:00 (D+1) → assigned to day D  ✓
-    # and    valid_time 00:00 (D)   → assigned to day D-1    ✓
-    #
-    # For instantaneous vars: timestamps are snapshots; group by calendar date as-is.
-    if var in ACCUM_VARS:
-        grouping_times = times_dt - pd.Timedelta(hours=1)
-    else:
-        grouping_times = times_dt
-
-    dates        = np.array([t.date() for t in grouping_times])
+    dates     = np.array([t.date() for t in times_dt])
     unique_dates = sorted(set(dates))
 
     daily_layers   = []

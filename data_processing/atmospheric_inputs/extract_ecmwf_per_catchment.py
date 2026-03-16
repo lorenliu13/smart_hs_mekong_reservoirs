@@ -95,7 +95,7 @@ START_MONTH = 1
 END_YEAR    = 2024
 END_MONTH   = 1
 N_DAYS      = 10     # number of forecast days to extract per init date
-OVERWRITE   = False  # set True to reprocess init dates that already have a CSV
+OVERWRITE   = True  # set True to reprocess init dates that already have a CSV
 N_WORKERS   = 10     # number of parallel worker processes
 
 # ---------------------------------------------------------------------------
@@ -517,9 +517,11 @@ def process_variable_month(
             n_skip += 1
             continue
 
-        # Valid dates: day 1 = init + 1, day 2 = init + 2, …
+        # Valid dates: day 1 covers T+0…T+24 h = the init calendar date itself.
+        #   d=1: step 0→24 h  → valid_date = init_date
+        #   d=2: step 24→48 h → valid_date = init_date + 1
         valid_dates = pd.date_range(
-            start=init_date + pd.Timedelta(days=1),
+            start=init_date,
             periods=n_days_use, freq="1D",
         )
 
