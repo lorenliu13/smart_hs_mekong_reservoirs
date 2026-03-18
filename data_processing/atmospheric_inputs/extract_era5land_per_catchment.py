@@ -83,7 +83,7 @@ LAKE_CENTROIDS_CSV = (
 )
 OUTPUT_DIR = Path(
     rf"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs"
-    rf"\era5_land\era5land_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    rf"\era5_land\era5land_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
@@ -96,22 +96,23 @@ N_WORKERS   = 8      # number of parallel worker processes
 
 # ---------------------------------------------------------------------------
 # Variable metadata  col_name → unit
+# (aggregation is already applied by aggregate_era5land_to_daily.py)
 # ---------------------------------------------------------------------------
 VAR_META = {
-    "tp"   : "m",
-    # "t2m"  : "K",
-    # "d2m"  : "K",
-    # "sp"   : "Pa",
-    # "u10"  : "m/s",
-    # "v10"  : "m/s",
-    # "ssrd" : "J/m2",
-    # "strd" : "J/m2",
-    # "sf"   : "m",
-    # "sd"   : "m",
-    # "swvl1": "m3/m3",
-    # "swvl2": "m3/m3",
-    # "swvl3": "m3/m3",
-    # "swvl4": "m3/m3",
+    "tp"    : "m",
+    "t2m"   : "K",
+    "d2m"   : "K",
+    "sp"    : "Pa",
+    "u10"   : "m/s",
+    "v10"   : "m/s",
+    "ssrd"  : "J/m2",
+    "strd"  : "J/m2",
+    "sf"    : "m",
+    "sd"    : "m",
+    "swvl1" : "m3/m3",
+    "swvl2" : "m3/m3",
+    "swvl3" : "m3/m3",
+    "swvl4" : "m3/m3",
 }
 
 # ---------------------------------------------------------------------------
@@ -223,7 +224,6 @@ def compute_spatial_weights(
                 areas.append(intersection.area)
 
         if not flat_indices:
-            # Tiny catchment falls inside one grid cell — use centroid fallback
             cx, cy = lake_geom.centroid.x, lake_geom.centroid.y
             cent_gdf = gpd.GeoDataFrame(
                 geometry=gpd.points_from_xy([cx], [cy]), crs=EQUAL_AREA_CRS
@@ -245,7 +245,6 @@ def compute_spatial_weights(
         if (row_i + 1) % 50 == 0:
             print(f"    … {row_i + 1}/{n_catch} done")
 
-    # --- Lakes without catchment polygons (centroid fallback) ---
     catchment_lake_ids = set(catchments_gdf["lake_id"].astype(int))
 
     if lake_centroids:

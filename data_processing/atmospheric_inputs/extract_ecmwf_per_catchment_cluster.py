@@ -1,6 +1,10 @@
 """
 Extract ECMWF IFS HRES forecast data for lake catchment polygons.
-Cluster version — paths point to HPC storage; 10-worker multiprocessing.
+Cluster version — paths point to HPC storage; 20-worker multiprocessing.
+
+Reads the daily-aggregated NetCDF files produced by aggregate_ecmwf_to_daily.py
+(one file per variable per month) and applies spatial weights to compute a
+per-lake time series.
 
 For each forecast initialisation date and each lake in the GRIT PLD database:
 
@@ -9,29 +13,23 @@ For each forecast initialisation date and each lake in the GRIT PLD database:
   * Lakes without a catchment       → value at the nearest ECMWF grid cell
     to the lake centroid.
 
-Daily aggregation rules (same as in the exploration notebooks)
---------------------------------------------------------------
-  Accumulated vars (tp, ssrd, strd, sf):
-      day_d = field[step = d*24 h] − field[step = (d-1)*24 h]
-
-  Instantaneous vars (2t, 2d, sp, 10u, 10v, sd, swvl1-4):
-      day_d = mean( steps [(d-1)*24+6, (d-1)*24+12, (d-1)*24+18, d*24] )
-
-Inputs
-------
-  ECMWF GRIB2 files  : <DATA_DIR>/<YYYY-MM>/hres_mekong_<YYYY-MM>_<var>.grib2
-  Catchment shapefile: gritv06_pld_lake_catchments_0sqkm.shp
-                       Columns: lake_id, geometry
-  Lake centroid CSV  : Optional; required only for lakes absent from the
-                       catchment shapefile.
-                       Columns: lake_id, lon, lat
+Input file format (daily NetCDF)
+---------------------------------
+  <DATA_DIR>/<YYYY-MM>/hres_mekong_<YYYY-MM>_<col_name>_daily.nc
+  Dimensions: (init_time, forecast_day, latitude, longitude)
+  Variable  : <col_name>  (e.g. "tp", "t2m", …)
+  Coordinates:
+    init_time    : datetime64  forecast initialisation dates
+    forecast_day : int         1 … N_DAYS
+    valid_time   : datetime64  (init_time, forecast_day)  calendar date per cell
+  Units     : as produced by aggregate_ecmwf_to_daily.py
 
 Outputs
 -------
   Variables are processed one at a time.  One CSV per variable per
   initialisation date, organised into per-variable sub-directories:
 
-      <OUTPUT_DIR>/<var>/ecmwf_per_lake_<var>_<YYYY-MM-DD>.csv
+      <OUTPUT_DIR>/<col_name>/ecmwf_per_lake_<col_name>_<YYYY-MM-DD>.csv
 
   Columns:
       lake_id, init_date, forecast_day, valid_date,
@@ -46,18 +44,15 @@ Usage
 
 Dependencies
 ------------
-  numpy, pandas, geopandas, xarray, cfgrib, shapely
+  numpy, pandas, geopandas, xarray, shapely
   (cartopy / matplotlib NOT required — data-only script)
 """
 
-import contextlib
-import os
 import pickle
 import warnings
 from pathlib import Path
 from multiprocessing import Pool
 
-import cfgrib
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -71,7 +66,7 @@ LAKE_AREA_THRESHOLD_SQKM = 0
 # ---------------------------------------------------------------------------
 # Configuration — HPC cluster paths
 # ---------------------------------------------------------------------------
-DATA_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres")
+DATA_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres_daily")
 CATCHMENT_SHP = (
     r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
     rf"/gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
@@ -80,7 +75,10 @@ LAKE_CENTROIDS_CSV = (
     r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
     rf"/gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
-OUTPUT_DIR = Path(rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs/hres/ecmwf_ifs_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm")
+OUTPUT_DIR = Path(
+    rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs"
+    rf"/ecmwf_ifs/hres/ecmwf_ifs_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+)
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
 START_YEAR  = 2023
@@ -92,120 +90,54 @@ OVERWRITE   = False  # set True to reprocess init dates that already have a CSV
 N_WORKERS   = 20     # number of parallel worker processes (match --cpus-per-task in sbatch)
 
 # ---------------------------------------------------------------------------
-# Variable metadata
+# Variable metadata  col_name → unit
+# (aggregation is already applied by aggregate_ecmwf_to_daily.py)
 # ---------------------------------------------------------------------------
 VAR_META = {
-    "tp"    : ("tp",    "accum", "m"),
-    "2t"    : ("t2m",   "inst",  "K"),
-    "2d"    : ("d2m",   "inst",  "K"),
-    "sp"    : ("sp",    "inst",  "Pa"),
-    "10u"   : ("u10",   "inst",  "m/s"),
-    "10v"   : ("v10",   "inst",  "m/s"),
-    "ssrd"  : ("ssrd",  "accum", "J/m2"),
-    "strd"  : ("strd",  "accum", "J/m2"),
-    "sf"    : ("sf",    "accum", "m"),
-    "sd"    : ("sd",    "inst",  "m"),
-    "swvl1" : ("swvl1", "inst",  "m3/m3"),
-    "swvl2" : ("swvl2", "inst",  "m3/m3"),
-    "swvl3" : ("swvl3", "inst",  "m3/m3"),
-    "swvl4" : ("swvl4", "inst",  "m3/m3"),
+    "tp"    : "m",
+    "t2m"   : "K",
+    "d2m"   : "K",
+    "sp"    : "Pa",
+    "u10"   : "m/s",
+    "v10"   : "m/s",
+    "ssrd"  : "J/m2",
+    "strd"  : "J/m2",
+    "sf"    : "m",
+    "sd"    : "m",
+    "swvl1" : "m3/m3",
+    "swvl2" : "m3/m3",
+    "swvl3" : "m3/m3",
+    "swvl4" : "m3/m3",
 }
 
-ACCUM_VARS = {v for v, meta in VAR_META.items() if meta[1] == "accum"}
-INST_VARS  = {v for v, meta in VAR_META.items() if meta[1] == "inst"}
-
 # ---------------------------------------------------------------------------
-# ECMWF grid parameters  (must match download settings)
+# Grid parameters
 # ---------------------------------------------------------------------------
-GRID_RES = 0.1
+GRID_RES       = 0.1
 EQUAL_AREA_CRS = "ESRI:54034"
 
 
 # ===========================================================================
-# I.  GRIB loading helpers
+# I.  Daily NetCDF loading helper
 # ===========================================================================
 
-def grib_file_path(data_dir: Path, year: int, month: int, var: str) -> Path:
-    return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_{var}.grib2"
+def daily_nc_file_path(data_dir: Path, year: int, month: int, col_name: str) -> Path:
+    return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_{col_name}_daily.nc"
 
 
-def step_to_hours(da: xr.DataArray) -> np.ndarray:
-    return (da.step.values / np.timedelta64(1, "h")).astype(int)
-
-
-@contextlib.contextmanager
-def _suppress_fd2():
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    saved   = os.dup(2)
-    os.dup2(devnull, 2)
-    os.close(devnull)
-    try:
-        yield
-    finally:
-        os.dup2(saved, 2)
-        os.close(saved)
-
-
-def load_grib_variable(grib_path: Path, var: str) -> xr.DataArray | None:
-    if not grib_path.exists():
-        print(f"  [MISS] {grib_path.name}")
+def load_daily_ecmwf(nc_path: Path) -> xr.Dataset | None:
+    if not nc_path.exists():
+        print(f"  [MISS] {nc_path.name}")
         return None
     try:
-        with _suppress_fd2():
-            ds_list = cfgrib.open_datasets(str(grib_path))
-        ds = ds_list[0]
-        grib_key = list(ds.data_vars)[0]
-        da = ds[grib_key]
-        if "time" not in da.dims:
-            da = da.expand_dims("time")
-        return da
+        return xr.open_dataset(nc_path)
     except Exception as exc:
-        print(f"  [FAIL] {grib_path.name}: {exc}")
+        print(f"  [FAIL] {nc_path.name}: {exc}")
         return None
 
 
 # ===========================================================================
-# II.  Daily aggregation
-# ===========================================================================
-
-def compute_daily_fields(
-    da: xr.DataArray,
-    var: str,
-    t_idx: int,
-    n_days: int = 10,
-) -> np.ndarray:
-    da_init  = da.isel(time=t_idx)
-    hrs      = step_to_hours(da)
-    hrs_set  = set(hrs.tolist())
-    h_to_idx = {int(h): i for i, h in enumerate(hrs)}
-    days     = []
-
-    for d in range(1, n_days + 1):
-        h_start = (d - 1) * 24
-        h_end   = d * 24
-
-        if var in ACCUM_VARS:
-            i0 = h_to_idx[h_start]
-            i1 = h_to_idx[h_end]
-            daily_val = da_init.isel(step=i1).values - da_init.isel(step=i0).values
-        else:
-            intra_hours = [h for h in [h_start + 6, h_start + 12, h_start + 18, h_end]
-                           if h in hrs_set]
-            if not intra_hours:
-                raise ValueError(
-                    f"No intra-day steps found for var={var}, day={d}, h_start={h_start}"
-                )
-            indices   = [h_to_idx[h] for h in intra_hours]
-            slices    = np.stack([da_init.isel(step=i).values for i in indices], axis=0)
-            daily_val = slices.mean(axis=0)
-
-        days.append(daily_val)
-
-    return np.stack(days, axis=0)
-
-
-# ===========================================================================
-# III.  Spatial weights computation
+# II.  Spatial weights computation
 # ===========================================================================
 
 def _build_ecmwf_grid_polygons(lats, lons, res=GRID_RES):
@@ -291,7 +223,7 @@ def compute_spatial_weights(catchments_gdf, lats, lons, lake_centroids=None):
 
 
 # ===========================================================================
-# IV.  Fast per-lake extraction
+# III.  Fast per-lake extraction
 # ===========================================================================
 
 def extract_lake_values(daily_grid, weights_dict):
@@ -307,7 +239,7 @@ def extract_lake_values(daily_grid, weights_dict):
 
 
 # ===========================================================================
-# V.  Loading helpers
+# IV.  Loading helpers
 # ===========================================================================
 
 def load_lake_centroids(csv_path: str) -> dict:
@@ -339,21 +271,24 @@ def load_or_compute_weights(weights_cache, catchments_gdf, lats, lons, lake_cent
 
 
 # ===========================================================================
-# VI.  Main processing loop
+# V.  Main processing loop
 # ===========================================================================
 
 def process_variable_month(
-    data_dir, year, month, var, col_name, weights_dict, n_days, output_dir, overwrite=False
+    data_dir, year, month, col_name, weights_dict, n_days, output_dir, overwrite=False
 ):
-    fpath = grib_file_path(data_dir, year, month, var)
-    da    = load_grib_variable(fpath, var)
-    if da is None:
+    nc_path = daily_nc_file_path(data_dir, year, month, col_name)
+    ds = load_daily_ecmwf(nc_path)
+    if ds is None:
         return
 
-    init_times = np.atleast_1d(da.time.values)
+    init_times     = ds["init_time"].values       # (n_init,)
+    forecast_days  = ds["forecast_day"].values    # (n_days_in_file,)
+    valid_time_arr = ds["valid_time"].values       # (n_init, n_days_in_file)
+    data_arr       = ds[col_name].values           # (n_init, n_days_in_file, n_lat, n_lon)
+
     n_init     = len(init_times)
-    hrs        = step_to_hours(da)
-    n_days_use = min(n_days, int(hrs.max()) // 24)
+    n_days_use = min(n_days, len(forecast_days))
 
     if n_days_use < n_days:
         print(f"    Warning: only {n_days_use} forecast days available "
@@ -374,16 +309,11 @@ def process_variable_month(
             n_skip += 1
             continue
 
-        valid_dates = pd.date_range(
-            start=init_date + pd.Timedelta(days=1),
-            periods=n_days_use, freq="1D",
-        )
-
-        try:
-            daily_grid = compute_daily_fields(da, var, t_idx, n_days_use)
-        except Exception as exc:
-            print(f"    Warning: {init_str}: {exc}")
-            continue
+        daily_grid  = data_arr[t_idx, :n_days_use]   # (n_days_use, n_lat, n_lon)
+        valid_dates = [
+            pd.Timestamp(vt).strftime("%Y-%m-%d")
+            for vt in valid_time_arr[t_idx, :n_days_use]
+        ]
 
         lake_vals = extract_lake_values(daily_grid, weights_dict)
 
@@ -395,8 +325,8 @@ def process_variable_month(
                 records.append({
                     "lake_id"          : lake_id,
                     "init_date"        : init_str,
-                    "forecast_day"     : d + 1,
-                    "valid_date"       : valid_dates[d].strftime("%Y-%m-%d"),
+                    "forecast_day"     : int(forecast_days[d]),
+                    "valid_date"       : valid_dates[d],
                     col_name           : float(vals[d]),
                     "extraction_method": method,
                 })
@@ -404,7 +334,9 @@ def process_variable_month(
         pd.DataFrame(records).to_csv(out_csv, index=False)
         n_saved += 1
 
-    msg = f"  {var:6s} ({col_name})  {year}-{month:02d}:"
+    ds.close()
+
+    msg = f"  {col_name:6s}  {year}-{month:02d}:"
     msg += f"  {n_saved} init date(s) saved"
     if n_skip:
         msg += f",  {n_skip} skipped (already exist)"
@@ -416,7 +348,7 @@ def _worker(args: tuple) -> None:
 
 
 # ===========================================================================
-# VII.  Entry point
+# VI.  Entry point
 # ===========================================================================
 
 def main() -> None:
@@ -429,31 +361,32 @@ def main() -> None:
     if lake_centroids:
         print(f"  Loaded {len(lake_centroids)} lake centroids from CSV.")
 
-    print("\nDetecting ECMWF grid from first available GRIB2 file …")
-    ref_da = None
+    print("\nDetecting ECMWF grid from first available daily NetCDF file …")
+    ref_ds = None
     for year in range(START_YEAR, END_YEAR + 1):
         m_start = START_MONTH if year == START_YEAR else 1
         m_end   = END_MONTH   if year == END_YEAR   else 12
         for month in range(m_start, m_end + 1):
-            for var in VAR_META:
-                fpath = grib_file_path(DATA_DIR, year, month, var)
+            for col_name in VAR_META:
+                fpath = daily_nc_file_path(DATA_DIR, year, month, col_name)
                 if fpath.exists():
-                    ref_da = load_grib_variable(fpath, var)
-                    if ref_da is not None:
+                    ref_ds = load_daily_ecmwf(fpath)
+                    if ref_ds is not None:
                         break
-            if ref_da is not None:
+            if ref_ds is not None:
                 break
-        if ref_da is not None:
+        if ref_ds is not None:
             break
 
-    if ref_da is None:
+    if ref_ds is None:
         raise FileNotFoundError(
-            f"No GRIB2 files found under {DATA_DIR} for the requested "
+            f"No daily ECMWF NetCDF files found under {DATA_DIR} for the requested "
             f"period {START_YEAR}-{START_MONTH:02d} to {END_YEAR}-{END_MONTH:02d}."
         )
 
-    lats = ref_da.latitude.values
-    lons = ref_da.longitude.values
+    lats = ref_ds["latitude"].values
+    lons = ref_ds["longitude"].values
+    ref_ds.close()
     print(f"  Grid: lat {lats[-1]:.1f}–{lats[0]:.1f}°N ({len(lats)} pts), "
           f"lon {lons[0]:.1f}–{lons[-1]:.1f}°E ({len(lons)} pts)")
 
@@ -464,14 +397,13 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     tasks = []
-    for var, meta in VAR_META.items():
-        col_name = meta[0]
+    for col_name in VAR_META:
         for year in range(START_YEAR, END_YEAR + 1):
             m_start = START_MONTH if year == START_YEAR else 1
             m_end   = END_MONTH   if year == END_YEAR   else 12
             for month in range(m_start, m_end + 1):
                 tasks.append((
-                    DATA_DIR, year, month, var, col_name,
+                    DATA_DIR, year, month, col_name,
                     weights_dict, N_DAYS, OUTPUT_DIR, OVERWRITE,
                 ))
 
