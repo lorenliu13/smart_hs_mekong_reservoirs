@@ -19,12 +19,13 @@ Aggregation rules
   Accumulated vars (tp, ssrd, strd):
       ERA5-Land stores running accumulations that reset each midnight UTC.
       valid_time 00:00 UTC on day D = 24-hour cumulative total for day D-1.
-      Only the midnight (00:00 UTC) value is used for each day; it is
-      attributed to the preceding calendar day (D-1).
 
-      Note: the file boundary may cause the last day of a month to be
-      missing (its midnight value is in the following month's file) or the
-      first midnight to belong to the preceding month (discarded silently).
+      Boundary handling (consistent with instantaneous variable dates):
+        - First 00:00 UTC (day 1 of month) represents the previous month's
+          last day and is discarded.
+        - Days 2..N-1: midnight (00:00 UTC) values shifted back 1 day.
+        - Last day (day N): 00:00 UTC falls in the next month's file, so the
+          23:00 UTC value of day N is used as the daily total approximation.
 
   Instantaneous vars (2t, 2d, sp, 10u, 10v, sd, swvl1, swvl2, swvl3, swvl4):
       Grouped by calendar date as-is and averaged over all hourly snapshots.
@@ -159,15 +160,20 @@ def compute_daily_fields(
     data: np.ndarray,
     valid_times: np.ndarray,
     var: str,
+    last_day_override: tuple[np.ndarray, object] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """
     Aggregate hourly ERA5-Land data to daily values.
 
     Parameters
     ----------
-    data        : float32 ndarray  (n_hours, n_lat, n_lon)
-    valid_times : int64 ndarray    Unix timestamps (1-hourly)
-    var         : ERA5-Land variable short name
+    data             : float32 ndarray  (n_hours, n_lat, n_lon)
+    valid_times      : int64 ndarray    Unix timestamps (1-hourly)
+    var              : ERA5-Land variable short name
+    last_day_override: (data_2d, date) for the last day of the month, used only
+                       for accumulated vars.  Comes from the next month's first
+                       00:00 UTC value (preferred) or the current month's 23:00
+                       UTC value (fallback).  Pass None to compute from data alone.
 
     Returns
     -------
@@ -179,12 +185,32 @@ def compute_daily_fields(
     if var in ACCUM_VARS:
         # ERA5-Land accumulated vars are running totals that reset at 00:00 UTC.
         # The value at valid_time 00:00 UTC on day D is the 24-hour cumulative
-        # total for the preceding day (D-1).  Use only midnight values.
-        midnight_mask = np.array([t.hour == 0 for t in times_dt])
-        dates         = np.array([
-            (t - pd.Timedelta(days=1)).date() for t in times_dt[midnight_mask]
+        # total for the preceding day (D-1).  Use only midnight values, but:
+        #   - Discard the first 00:00 (e.g. Jan 1 00:00 = Dec 31's total, previous month).
+        #   - The last day's 00:00 is in the next month's file; use last_day_override
+        #     (next month's first 00:00, preferred) or this month's 23:00 (fallback).
+        midnight_indices = np.where(np.array([t.hour == 0 for t in times_dt]))[0]
+        midnight_indices = midnight_indices[1:]   # drop first 00:00 (previous period)
+
+        dates_mid = np.array([
+            (times_dt[i] - pd.Timedelta(days=1)).date() for i in midnight_indices
         ])
-        data_sel      = data[midnight_mask]
+        data_mid = data[midnight_indices]
+
+        # Resolve the last-day value from override or 23:00 fallback
+        if last_day_override is None:
+            last_23h_indices = np.where(np.array([t.hour == 23 for t in times_dt]))[0]
+            last_day_data = data[last_23h_indices[-1]]
+            last_day_date = times_dt[last_23h_indices[-1]].date()
+        else:
+            last_day_data, last_day_date = last_day_override
+
+        if last_day_date not in dates_mid:
+            dates    = np.append(dates_mid, last_day_date)
+            data_sel = np.concatenate([data_mid, last_day_data[np.newaxis]], axis=0)
+        else:
+            dates    = dates_mid
+            data_sel = data_mid
     else:
         dates    = np.array([t.date() for t in times_dt])
         data_sel = data
@@ -236,12 +262,30 @@ def process_variable_month(
         return
 
     nc_path = nc_file_path(data_dir, year, month, var)
-    result  = load_era5land_variable(nc_path)
+    result  = load_era5land_variable(nc_path) # data, valid_times, lats, lons, var_name
     if result is None:
         return
     data, valid_times, lats, lons, _var_name = result
 
-    daily_data, date_strings = compute_daily_fields(data, valid_times, var)
+    # For accumulated vars: try the next month's file to get the proper
+    # 00:00 UTC value for the last day of this month.  Fall back to 23:00 UTC.
+    last_day_override = None
+    if var in ACCUM_VARS:
+        next_year  = year + 1 if month == 12 else year
+        next_month = 1        if month == 12 else month + 1
+        next_result = load_era5land_variable(
+            nc_file_path(data_dir, next_year, next_month, var)
+        ) # data, valid_times, lats, lons, var_name
+        if next_result is not None:
+            nd, nt, *_ = next_result
+            nt_dt = pd.to_datetime(nt, unit="s", utc=True)
+            for i, t in enumerate(nt_dt):
+                if t.hour == 0:
+                    last_day_date = (t - pd.Timedelta(days=1)).date()
+                    last_day_override = (nd[i], last_day_date)
+                    break
+
+    daily_data, date_strings = compute_daily_fields(data, valid_times, var, last_day_override)
 
     times_dt64 = pd.to_datetime(date_strings).values.astype("datetime64[ns]")
 
@@ -254,7 +298,9 @@ def process_variable_month(
                     "units"      : units,
                     "long_name"  : LONG_NAMES.get(col_name, col_name),
                     "aggregation": (
-                        "24-hour cumulative total at 00:00 UTC, attributed to preceding calendar day"
+                        "24-hour cumulative total: 00:00 UTC shifted to preceding day; "
+                        "first 00:00 (previous month) discarded; "
+                        "last day from next month's first 00:00 UTC (or 23:00 UTC fallback)"
                         if var in ACCUM_VARS else
                         "mean of hourly snapshots per calendar day"
                     ),
@@ -273,7 +319,10 @@ def process_variable_month(
         "timestamp_convention": (
             "Accumulated vars: ERA5-Land running accumulation resets at 00:00 UTC each day. "
             "valid_time 00:00 UTC on day D = 24-hour total for day D-1. "
-            "Only midnight values are used and attributed to the preceding calendar day."
+            "First 00:00 (previous month's total) is discarded. "
+            "Days 2..N-1 use midnight values shifted to preceding day. "
+            "Last day uses the next month's first 00:00 UTC (if available) "
+            "or this month's 23:00 UTC as a fallback."
         ),
         "created_by" : "aggregate_era5land_to_daily.py",
     }

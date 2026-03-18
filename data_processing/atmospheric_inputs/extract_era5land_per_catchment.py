@@ -1,6 +1,10 @@
 """
 Extract ERA5-Land reanalysis data for lake catchment polygons.
 
+Reads the daily-aggregated NetCDF files produced by aggregate_era5land_to_daily.py
+(one file per variable per month) and applies spatial weights to compute a
+per-lake time series.
+
 For each calendar month and each lake in the GRIT PLD database:
 
   * Lakes with a catchment polygon  → area-weighted average of all ERA5-Land
@@ -8,31 +12,21 @@ For each calendar month and each lake in the GRIT PLD database:
   * Lakes without a catchment       → value at the nearest ERA5-Land grid cell
     to the lake centroid.
 
-ERA5-Land file format
----------------------
-  Each file is a ZIP archive named
-      era5land_mekong_<YYYY-MM>_<var>.nc
-  containing a single member ``data_0.nc`` (HDF5/NetCDF4-4 format).
-  Dimensions: (valid_time, latitude, longitude)
-  Time resolution: 1-hourly.
-
-Daily aggregation rules
------------------------
-  Accumulated vars (tp, ssrd, strd, sf):
-      day_d = sum of the 24 hourly values for that calendar day
-              (ERA5-Land stores hourly-interval totals, not running sums)
-
-  Instantaneous vars (2t, 2d, sp, 10u, 10v, sd, swvl1-4):
-      day_d = mean of the 24 hourly snapshots for that calendar day
+Input file format (daily NetCDF)
+---------------------------------
+  <DAILY_DIR>/<YYYY-MM>/era5land_mekong_<YYYY-MM>_<col_name>_daily.nc
+  Dimensions: (time, latitude, longitude)
+  Variable  : <col_name>  (e.g. "tp", "t2m", …)
+  Units     : as produced by aggregate_era5land_to_daily.py
 
 Inputs
 ------
-  ERA5-Land NC (ZIP) files: <DATA_DIR>/<YYYY-MM>/era5land_mekong_<YYYY-MM>_<var>.nc
-  Catchment shapefile      : gritv06_pld_lake_catchments_0sqkm.shp
-                             Columns: lake_id, geometry
-  Lake centroid CSV        : Optional; required only for lakes absent from the
-                             catchment shapefile.
-                             Columns: lake_id, lon, lat
+  Daily ERA5-Land NetCDF files : <DAILY_DIR>/<YYYY-MM>/era5land_mekong_<YYYY-MM>_<col_name>_daily.nc
+  Catchment shapefile          : gritv06_pld_lake_catchments_0sqkm.shp
+                                 Columns: lake_id, geometry
+  Lake centroid CSV            : Optional; required only for lakes absent from the
+                                 catchment shapefile.
+                                 Columns: lake_id, lon, lat
 
 Outputs
 -------
@@ -51,28 +45,22 @@ Outputs
 
 Usage
 -----
-  python extract_era5land_per_catchment.py [options]
-
-  Run `python extract_era5land_per_catchment.py --help` for full options.
+  python extract_era5land_per_catchment.py
 
 Dependencies
 ------------
-  numpy, pandas, geopandas, xarray, h5py, shapely
-  (cartopy / matplotlib NOT required — data-only script)
+  numpy, pandas, geopandas, xarray, shapely
 """
 
-import io
-import os
 import pickle
 import warnings
-import zipfile
 from multiprocessing import Pool
 from pathlib import Path
 
 import geopandas as gpd
-import h5py
 import numpy as np
 import pandas as pd
+import xarray as xr
 from shapely.geometry import box
 
 warnings.filterwarnings("ignore")
@@ -82,7 +70,7 @@ LAKE_AREA_THRESHOLD_SQKM = 0
 # ---------------------------------------------------------------------------
 # Configuration  (edit here to change behaviour)
 # ---------------------------------------------------------------------------
-DATA_DIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\era5_land")
+DAILY_DIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\era5_land_daily")
 CATCHMENT_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reservoirs"
@@ -107,30 +95,24 @@ OVERWRITE   = False  # set True to reprocess months that already have a CSV
 N_WORKERS   = 8      # number of parallel worker processes
 
 # ---------------------------------------------------------------------------
-# Variable metadata
+# Variable metadata  col_name → unit
 # ---------------------------------------------------------------------------
-# var_short_name → (col_name, aggregation_type, unit)
-#   col_name  : column name used in output CSVs and sub-directory name
-#   agg_type  : "accum" | "inst"
-#   unit      : native ERA5-Land unit (kept as-is in output)
 VAR_META = {
-    "tp"    : ("tp",    "accum", "m"),
-    # "2t"    : ("t2m",   "inst",  "K"),
-    # "2d"    : ("d2m",   "inst",  "K"),
-    # "sp"    : ("sp",    "inst",  "Pa"),
-    # "10u"   : ("u10",   "inst",  "m/s"),
-    # "10v"   : ("v10",   "inst",  "m/s"),
-    # "ssrd"  : ("ssrd",  "accum", "J/m2"),
-    # "strd"  : ("strd",  "accum", "J/m2"),
-    # "sf"    : ("sf",    "accum", "m"),
-    # "sd"    : ("sd",    "inst",  "m"),
-    # "swvl1" : ("swvl1", "inst",  "m3/m3"),
-    # "swvl2" : ("swvl2", "inst",  "m3/m3"),
-    # "swvl3" : ("swvl3", "inst",  "m3/m3"),
-    # "swvl4" : ("swvl4", "inst",  "m3/m3"),
+    "tp"   : "m",
+    # "t2m"  : "K",
+    # "d2m"  : "K",
+    # "sp"   : "Pa",
+    # "u10"  : "m/s",
+    # "v10"  : "m/s",
+    # "ssrd" : "J/m2",
+    # "strd" : "J/m2",
+    # "sf"   : "m",
+    # "sd"   : "m",
+    # "swvl1": "m3/m3",
+    # "swvl2": "m3/m3",
+    # "swvl3": "m3/m3",
+    # "swvl4": "m3/m3",
 }
-
-ACCUM_VARS = {v for v, meta in VAR_META.items() if meta[1] == "accum"}
 
 # ---------------------------------------------------------------------------
 # Grid parameters
@@ -140,28 +122,28 @@ EQUAL_AREA_CRS = "ESRI:54034"   # WGS 84 / World Cylindrical Equal Area
 
 
 # ===========================================================================
-# I.  NetCDF loading helpers
+# I.  Daily NetCDF loading helper
 # ===========================================================================
 
-def nc_file_path(data_dir: Path, year: int, month: int, var: str) -> Path:
-    """Return path to a monthly ERA5-Land ZIP-wrapped NetCDF file."""
-    return data_dir / f"{year}-{month:02d}" / f"era5land_mekong_{year}-{month:02d}_{var}.nc"
+def daily_nc_file_path(daily_dir: Path, year: int, month: int, col_name: str) -> Path:
+    """Return path to a monthly ERA5-Land daily-aggregated NetCDF file."""
+    return daily_dir / f"{year}-{month:02d}" / f"era5land_mekong_{year}-{month:02d}_{col_name}_daily.nc"
 
 
-def load_era5land_variable(nc_path: Path, var: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+def load_daily_era5land(
+    nc_path: Path,
+    col_name: str,
+) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray] | None:
     """
-    Load one variable from an ERA5-Land ZIP-wrapped NetCDF4 file.
-
-    The CDS download format is: <name>.nc → ZIP containing ``data_0.nc``
-    (HDF5/NetCDF4).
+    Load one variable from a daily ERA5-Land NetCDF file.
 
     Returns
     -------
-    (data, valid_times, lats, lons) where
-        data        : float32 ndarray  shape (n_times, n_lat, n_lon)
-        valid_times : int64 ndarray   Unix timestamps (seconds since 1970-01-01)
-        lats        : float64 ndarray  decreasing
-        lons        : float64 ndarray  increasing
+    (data, date_strings, lats, lons) where
+        data         : float32 ndarray  shape (n_days, n_lat, n_lon)
+        date_strings : list of "YYYY-MM-DD" strings, one per day
+        lats         : float64 ndarray  decreasing
+        lons         : float64 ndarray  increasing
 
     Returns None if the file does not exist or cannot be read.
     """
@@ -169,98 +151,20 @@ def load_era5land_variable(nc_path: Path, var: str) -> tuple[np.ndarray, np.ndar
         print(f"  [MISS] {nc_path.name}")
         return None
     try:
-        with zipfile.ZipFile(nc_path) as zf:
-            inner_name = zf.namelist()[0]   # typically "data_0.nc"
-            with zf.open(inner_name) as f:
-                raw = f.read()
-        buf = io.BytesIO(raw)
-        with h5py.File(buf, "r") as hf:
-            # Identify the data variable: first non-coordinate key
-            coord_keys = {"latitude", "longitude", "valid_time", "expver", "number"}
-            data_keys  = [k for k in hf.keys() if k not in coord_keys]
-            if not data_keys:
-                raise ValueError(f"No data variable found in {nc_path.name}")
-            data_key = data_keys[0]
-
-            data        = hf[data_key][:]          # (n_times, n_lat, n_lon)
-            valid_times = hf["valid_time"][:]       # Unix timestamps
-            lats        = hf["latitude"][:]
-            lons        = hf["longitude"][:]
-        return data, valid_times, lats, lons
+        ds           = xr.open_dataset(nc_path)
+        data         = ds[col_name].values.astype(np.float32)
+        date_strings = [str(pd.Timestamp(t).date()) for t in ds["time"].values]
+        lats         = ds["latitude"].values
+        lons         = ds["longitude"].values
+        ds.close()
+        return data, date_strings, lats, lons
     except Exception as exc:
         print(f"  [FAIL] {nc_path.name}: {exc}")
         return None
 
 
 # ===========================================================================
-# II.  Daily aggregation
-# ===========================================================================
-
-def compute_daily_fields(
-    data: np.ndarray,
-    valid_times: np.ndarray,
-    var: str,
-) -> tuple[np.ndarray, list[str]]:
-    """
-    Aggregate hourly ERA5-Land data to daily values.
-
-    Parameters
-    ----------
-    data        : float32 ndarray  shape (n_hours, n_lat, n_lon)
-    valid_times : int64 ndarray   Unix timestamps (1-hourly)
-    var         : ERA5-Land variable short name
-
-    Returns
-    -------
-    (daily_data, date_strings) where
-        daily_data   : float32 ndarray  shape (n_days, n_lat, n_lon)
-        date_strings : list of "YYYY-MM-DD" strings, one per day
-    """
-    # Convert Unix timestamps to pandas DatetimeIndex for easy grouping
-    times_dt = pd.to_datetime(valid_times, unit="s", utc=True)
-
-    # ERA5-Land tp timestamps mark the END of each 1-hour accumulation interval
-    # (e.g. valid_time 01:00 UTC = rain 00:00–01:00 UTC;
-    #        valid_time 00:00 UTC = rain 23:00–00:00 UTC → belongs to PREVIOUS day).
-    #
-    # Convention: day D = 00:00 UTC day D → 00:00 UTC day D+1.
-    #
-    # For accumulated vars: assign each hourly value to the day its interval
-    # *started* by shifting the timestamp back 1 hour before extracting the date.
-    # This means valid_time 00:00 (D+1) → assigned to day D  ✓
-    # and    valid_time 00:00 (D)   → assigned to day D-1    ✓
-    #
-    # For instantaneous vars: timestamps are snapshots; group by calendar date as-is.
-    if var in ACCUM_VARS:
-        grouping_times = times_dt - pd.Timedelta(hours=1)
-    else:
-        grouping_times = times_dt
-
-    dates        = np.array([t.date() for t in grouping_times])
-    unique_dates = sorted(set(dates))
-
-    daily_layers   = []
-    date_strings   = []
-
-    for d in unique_dates:
-        mask = dates == d
-        hourly_slice = data[mask]   # (24, n_lat, n_lon) for a full day
-
-        if var in ACCUM_VARS:
-            # Sum hourly amounts to get daily total
-            daily_val = hourly_slice.sum(axis=0)
-        else:
-            # Mean of 24 hourly snapshots
-            daily_val = hourly_slice.mean(axis=0)
-
-        daily_layers.append(daily_val)
-        date_strings.append(str(d))
-
-    return np.stack(daily_layers, axis=0), date_strings   # (n_days, n_lat, n_lon)
-
-
-# ===========================================================================
-# III.  Spatial weights computation  (identical logic to ECMWF script)
+# II.  Spatial weights computation
 # ===========================================================================
 
 def _build_grid_polygons(
@@ -364,7 +268,7 @@ def compute_spatial_weights(
 
 
 # ===========================================================================
-# IV.  Fast per-lake extraction  (identical logic to ECMWF script)
+# III.  Fast per-lake extraction
 # ===========================================================================
 
 def extract_lake_values(
@@ -390,7 +294,7 @@ def extract_lake_values(
 
 
 # ===========================================================================
-# V.  Loading helpers
+# IV.  Loading helpers
 # ===========================================================================
 
 def load_lake_centroids(csv_path: str) -> dict[int, tuple[float, float]]:
@@ -430,31 +334,27 @@ def load_or_compute_weights(
 
 
 # ===========================================================================
-# VI.  Main processing loop  (one variable × one month at a time)
+# V.  Main processing loop  (one variable × one month at a time)
 # ===========================================================================
 
 def process_variable_month(
-    data_dir: Path,
+    daily_dir: Path,
     year: int,
     month: int,
-    var: str,
     col_name: str,
     weights_dict: dict,
     output_dir: Path,
     overwrite: bool = False,
 ) -> None:
     """
-    Process one ERA5-Land variable for one month.
+    Extract per-lake values for one ERA5-Land variable for one month.
 
-    Output: one CSV saved to
+    Reads the pre-aggregated daily NetCDF produced by aggregate_era5land_to_daily.py
+    and writes one CSV to:
         <output_dir>/<col_name>/era5land_per_lake_<col_name>_<YYYY-MM>.csv
 
     Columns: lake_id, date, <col_name>, extraction_method
-
-    Skips months whose output CSV already exists (unless overwrite=True).
     """
-    fpath = nc_file_path(data_dir, year, month, var)
-
     var_dir = output_dir / col_name
     var_dir.mkdir(parents=True, exist_ok=True)
 
@@ -462,15 +362,15 @@ def process_variable_month(
     out_csv   = var_dir / f"era5land_per_lake_{col_name}_{month_str}.csv"
 
     if out_csv.exists() and not overwrite:
-        print(f"  {var:6s} ({col_name})  {month_str}: skipped (already exists)")
+        print(f"  {col_name:6s}  {month_str}: skipped (already exists)")
         return
 
-    result = load_era5land_variable(fpath, var)
+    nc_path = daily_nc_file_path(daily_dir, year, month, col_name)
+    result  = load_daily_era5land(nc_path, col_name)
     if result is None:
         return
-    data, valid_times, lats, lons = result
+    daily_grid, date_strings, _, _ = result
 
-    daily_grid, date_strings = compute_daily_fields(data, valid_times, var)
     lake_vals = extract_lake_values(daily_grid, weights_dict)
 
     records = []
@@ -486,7 +386,7 @@ def process_variable_month(
             })
 
     pd.DataFrame(records).to_csv(out_csv, index=False)
-    print(f"  {var:6s} ({col_name})  {month_str}: {len(date_strings)} day(s) → {out_csv.name}")
+    print(f"  {col_name:6s}  {month_str}: {len(date_strings)} day(s) → {out_csv.name}")
 
 
 def _worker(args: tuple) -> None:
@@ -495,7 +395,7 @@ def _worker(args: tuple) -> None:
 
 
 # ===========================================================================
-# VII.  Entry point
+# VI.  Entry point
 # ===========================================================================
 
 def main() -> None:
@@ -510,17 +410,17 @@ def main() -> None:
     if lake_centroids:
         print(f"  Loaded {len(lake_centroids)} lake centroids from CSV.")
 
-    # ---- 3. Determine ERA5-Land grid from the first available file ----
-    print("\nDetecting ERA5-Land grid from first available file …")
+    # ---- 3. Detect ERA5-Land grid from first available daily NetCDF ----
+    print("\nDetecting ERA5-Land grid from first available daily file …")
     ref_result = None
     for year in range(START_YEAR, END_YEAR + 1):
         m_start = START_MONTH if year == START_YEAR else 1
         m_end   = END_MONTH   if year == END_YEAR   else 12
         for month in range(m_start, m_end + 1):
-            for var in VAR_META:
-                fpath = nc_file_path(DATA_DIR, year, month, var)
+            for col_name in VAR_META:
+                fpath = daily_nc_file_path(DAILY_DIR, year, month, col_name)
                 if fpath.exists():
-                    ref_result = load_era5land_variable(fpath, var)
+                    ref_result = load_daily_era5land(fpath, col_name)
                     if ref_result is not None:
                         break
             if ref_result is not None:
@@ -530,7 +430,7 @@ def main() -> None:
 
     if ref_result is None:
         raise FileNotFoundError(
-            f"No ERA5-Land files found under {DATA_DIR} for the requested "
+            f"No daily ERA5-Land files found under {DAILY_DIR} for the requested "
             f"period {START_YEAR}-{START_MONTH:02d} to {END_YEAR}-{END_MONTH:02d}."
         )
 
@@ -543,18 +443,17 @@ def main() -> None:
         WEIGHTS_CACHE, catchments_gdf, lats, lons, lake_centroids
     )
 
-    # ---- 5. Build task list (var × month) ----
+    # ---- 5. Build task list (col_name × month) ----
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     tasks = []
-    for var, meta in VAR_META.items():
-        col_name = meta[0]
+    for col_name in VAR_META:
         for year in range(START_YEAR, END_YEAR + 1):
             m_start = START_MONTH if year == START_YEAR else 1
             m_end   = END_MONTH   if year == END_YEAR   else 12
             for month in range(m_start, m_end + 1):
                 tasks.append((
-                    DATA_DIR, year, month, var, col_name,
+                    DAILY_DIR, year, month, col_name,
                     weights_dict, OUTPUT_DIR, OVERWRITE,
                 ))
 
