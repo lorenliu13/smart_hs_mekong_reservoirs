@@ -66,7 +66,7 @@ LAKE_AREA_THRESHOLD_SQKM = 0
 # ---------------------------------------------------------------------------
 # Configuration — HPC cluster paths
 # ---------------------------------------------------------------------------
-DATA_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres_daily")
+DATA_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily/hres")
 CATCHMENT_SHP = (
     r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
     rf"/gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
@@ -77,7 +77,7 @@ LAKE_CENTROIDS_CSV = (
 )
 OUTPUT_DIR = Path(
     rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs"
-    rf"/ecmwf_ifs/hres/ecmwf_ifs_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    rf"/ecmwf_ifs_daily_catchment_level/hres/ecmwf_ifs_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
