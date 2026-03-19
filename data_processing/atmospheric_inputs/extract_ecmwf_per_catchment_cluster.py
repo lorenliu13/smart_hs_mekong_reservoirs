@@ -27,9 +27,9 @@ Input file format (daily NetCDF)
 Outputs
 -------
   Variables are processed one at a time.  One CSV per variable per
-  initialisation date, organised into per-variable sub-directories:
+  month (all init dates combined), organised into per-variable sub-directories:
 
-      <OUTPUT_DIR>/<col_name>/ecmwf_per_lake_<col_name>_<YYYY-MM-DD>.csv
+      <OUTPUT_DIR>/<col_name>/ecmwf_per_lake_<col_name>_<YYYY-MM>.csv
 
   Columns:
       lake_id, init_date, forecast_day, valid_date,
@@ -282,6 +282,15 @@ def process_variable_month(
     if ds is None:
         return
 
+    var_dir = output_dir / col_name
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    out_csv = var_dir / f"ecmwf_per_lake_{col_name}_{year}-{month:02d}.csv"
+    if out_csv.exists() and not overwrite:
+        print(f"  {col_name:6s}  {year}-{month:02d}:  skipped (already exists)")
+        ds.close()
+        return
+
     init_times     = ds["init_time"].values       # (n_init,)
     forecast_days  = ds["forecast_day"].values    # (n_days_in_file,)
     valid_time_arr = ds["valid_time"].values       # (n_init, n_days_in_file)
@@ -294,20 +303,11 @@ def process_variable_month(
         print(f"    Warning: only {n_days_use} forecast days available "
               f"(requested {n_days}).")
 
-    var_dir = output_dir / col_name
-    var_dir.mkdir(parents=True, exist_ok=True)
-
-    n_saved = 0
-    n_skip  = 0
+    all_records = []
 
     for t_idx in range(n_init):
         init_date = pd.Timestamp(init_times[t_idx]).normalize()
         init_str  = init_date.strftime("%Y-%m-%d")
-        out_csv   = var_dir / f"ecmwf_per_lake_{col_name}_{init_str}.csv"
-
-        if out_csv.exists() and not overwrite:
-            n_skip += 1
-            continue
 
         daily_grid  = data_arr[t_idx, :n_days_use]   # (n_days_use, n_lat, n_lon)
         valid_dates = [
@@ -317,12 +317,11 @@ def process_variable_month(
 
         lake_vals = extract_lake_values(daily_grid, weights_dict)
 
-        records = []
         for lake_id in sorted(weights_dict.keys()):
             method = weights_dict[lake_id]["method"]
             vals   = lake_vals.get(lake_id, np.full(n_days_use, np.nan))
             for d in range(n_days_use):
-                records.append({
+                all_records.append({
                     "lake_id"          : lake_id,
                     "init_date"        : init_str,
                     "forecast_day"     : int(forecast_days[d]),
@@ -331,16 +330,10 @@ def process_variable_month(
                     "extraction_method": method,
                 })
 
-        pd.DataFrame(records).to_csv(out_csv, index=False)
-        n_saved += 1
-
+    pd.DataFrame(all_records).to_csv(out_csv, index=False)
     ds.close()
 
-    msg = f"  {col_name:6s}  {year}-{month:02d}:"
-    msg += f"  {n_saved} init date(s) saved"
-    if n_skip:
-        msg += f",  {n_skip} skipped (already exist)"
-    print(msg)
+    print(f"  {col_name:6s}  {year}-{month:02d}:  {n_init} init date(s) saved → {out_csv.name}")
 
 
 def _worker(args: tuple) -> None:

@@ -499,22 +499,24 @@ def _determine_ecmwf_init_dates(ecmwf_base_dir: Path, probe_var: str = "tp") -> 
     """
     Scan the ECMWF per-lake directory for one variable to determine available init_dates.
 
-    Files are named: ecmwf_per_lake_{var}_YYYY-MM-DD.csv
+    Files are named: ecmwf_per_lake_{var}_YYYY-MM.csv  (one file per month, all
+    init_dates for that month combined in the init_date column).
+    Reads the init_date column from each monthly file to collect actual init_dates.
     """
     var_dir = ecmwf_base_dir / probe_var
     if not var_dir.exists():
         raise FileNotFoundError(f"ECMWF variable directory not found: {var_dir}")
 
-    dates = []
-    for fpath in sorted(var_dir.glob(f"ecmwf_per_lake_{probe_var}_*.csv")):
-        # File stem looks like "ecmwf_per_lake_tp_2024-01-14".
-        # The init_date is always the last "_"-separated token.
-        stem = fpath.stem
-        date_str = stem.split("_")[-1]
+    dates: set = set()
+    monthly_files = sorted(var_dir.glob(f"ecmwf_per_lake_{probe_var}_????-??.csv"))
+    for fpath in monthly_files:
         try:
-            dates.append(pd.Timestamp(date_str))
+            df = pd.read_csv(fpath, usecols=["init_date"])
+            parsed = pd.to_datetime(df["init_date"], errors="coerce").dropna()
+            for d in parsed:
+                dates.add(d.normalize())
         except Exception:
-            pass   # skip files whose names don't end in a valid date
+            pass   # skip unreadable files
 
     if not dates:
         raise ValueError(f"No ECMWF init_date files found in {var_dir}")
@@ -534,13 +536,18 @@ def load_ecmwf_climate_arrays(
     each of shape (n_lakes, n_init_dates, forecast_horizon).
 
     CSV format: lake_id, init_date, forecast_day, valid_date, {var_name}, extraction_method
-    Files:      ecmwf_base_dir/{var}/ecmwf_per_lake_{var}_YYYY-MM-DD.csv
+    Files:      ecmwf_base_dir/{var}/ecmwf_per_lake_{var}_YYYY-MM.csv
+                (one file per month; all init_dates for that month are combined)
     """
     n_lakes     = len(lake_ids)
     n_init      = len(all_init_dates)
     # Pre-build index maps for O(1) lookup inside the inner loop
     lake_to_idx = {lid: i for i, lid in enumerate(lake_ids)}
     init_to_idx = {d: i for i, d in enumerate(all_init_dates)}
+
+    # Group the requested init_dates by (year, month) so each monthly file
+    # is loaded exactly once.
+    year_months = sorted({(d.year, d.month) for d in all_init_dates})
 
     raw_dict = {}
     for var in raw_vars:
@@ -550,40 +557,46 @@ def load_ecmwf_climate_arrays(
         raw_cube = np.zeros((n_lakes, n_init, forecast_horizon), dtype=np.float32)
         n_missing = 0
 
-        for init_date in tqdm(all_init_dates, desc=f"    {var}", leave=False):
-            date_str = init_date.strftime("%Y-%m-%d")
-            # One CSV per init_date: rows = (lake_id, forecast_day) pairs
-            fpath = ecmwf_base_dir / var / f"ecmwf_per_lake_{var}_{date_str}.csv"
+        for (year, month) in tqdm(year_months, desc=f"    {var}", leave=False):
+            # One CSV per month: rows = (lake_id, init_date, forecast_day) combinations
+            fpath = ecmwf_base_dir / var / f"ecmwf_per_lake_{var}_{year}-{month:02d}.csv"
             if not fpath.exists():
                 n_missing += 1
                 continue
 
             df = pd.read_csv(fpath)
-            # Coerce to int64 and drop rows with invalid lake IDs
-            df["lake_id"] = pd.to_numeric(df["lake_id"], errors="coerce").dropna().astype(np.int64)
+            # Coerce types and drop invalid rows
+            df["lake_id"]   = pd.to_numeric(df["lake_id"],   errors="coerce").dropna().astype(np.int64)
+            df["init_date"] = pd.to_datetime(df["init_date"], errors="coerce")
+            df = df.dropna(subset=["init_date"])
+            df["init_date"] = df["init_date"].dt.normalize()
             # Keep only lakes that are in our target lake_ids list
             df = df[df["lake_id"].isin(lake_to_idx)]
             if df.empty:
                 continue
 
-            t_idx = init_to_idx[init_date]
-            # Pivot so rows = lake_id (matching lake_ids order) and
-            # columns = forecast_day (1-indexed integers).
-            pivot = (
-                df.pivot_table(index="lake_id", columns="forecast_day", values=var, aggfunc="first")
-                .reindex(index=lake_ids)
-            )
-            # Write each available forecast day into the raw cube.
-            # forecast_day is 1-indexed in the CSV; we store it 0-indexed in the array.
-            for fd in range(1, forecast_horizon + 1):
-                if fd in pivot.columns:
-                    col_vals = pivot[fd].to_numpy(dtype=np.float32)
-                    col_vals = np.nan_to_num(col_vals, nan=0.0)
-                    raw_cube[:, t_idx, fd - 1] = col_vals
+            # Process each init_date present in this monthly file
+            for init_date, grp in df.groupby("init_date"):
+                init_date = pd.Timestamp(init_date)
+                if init_date not in init_to_idx:
+                    continue
+
+                t_idx = init_to_idx[init_date]
+                # Pivot so rows = lake_id and columns = forecast_day (1-indexed integers)
+                pivot = (
+                    grp.pivot_table(index="lake_id", columns="forecast_day", values=var, aggfunc="first")
+                    .reindex(index=lake_ids)
+                )
+                # Write each available forecast day into the raw cube (0-indexed).
+                for fd in range(1, forecast_horizon + 1):
+                    if fd in pivot.columns:
+                        col_vals = pivot[fd].to_numpy(dtype=np.float32)
+                        col_vals = np.nan_to_num(col_vals, nan=0.0)
+                        raw_cube[:, t_idx, fd - 1] = col_vals
 
         if n_missing > 0:
-            pct = 100.0 * n_missing / max(n_init, 1)
-            print(f"    [WARN] {var}: {n_missing}/{n_init} init_date files missing ({pct:.1f}%)")
+            pct = 100.0 * n_missing / max(len(year_months), 1)
+            print(f"    [WARN] {var}: {n_missing}/{len(year_months)} monthly files missing ({pct:.1f}%)")
 
         raw_dict[var] = raw_cube
 
