@@ -1,0 +1,34 @@
+# SWOT-GNN config for lake-based multi-step WSE forecasting.
+#
+# Input: 40 timesteps (30 ERA5-Land history + 10 ECMWF IFS forecast)
+# Features: 14 per timestep = swot_dim(5) + climate_dim(9)
+#   SWOT    [0-4]: obs_mask, latest_wse, days_since_last_obs, doy_sin, doy_cos
+#   Climate [5-13]: LWd, SWd, P, Pres, Temp, Wind, RelHum, sd, swvl1
+# Static: 1 (placeholder zeros; expand when lake attributes become available)
+# Output: WSE for all 10 forecast days simultaneously (direct multi-step)
+
+model:
+  swot_dim: 5             # obs_mask, latest_wse, days_since_last_obs, doy_sin, doy_cos
+  climate_dim: 9          # LWd, SWd, P, Pres, Temp, Wind, RelHum, sd, swvl1
+  static_dim: 1           # placeholder — expand when lake static attrs are ready
+  static_embed_dim: 8     # small embed since static is placeholder
+  embed_dim: 64
+  hidden_dim: 32
+  st_blocks: 1            # regularised smaller model (fewer blocks reduces overfitting)
+  gps_layers_per_block: 1
+  gps_heads: 4
+  dropout: 0.1
+  forecast_horizon: 10    # direct multi-step: predict all 10 days at once
+
+training:
+  seq_len: 30             # ERA5-Land history window (days before init_date)
+  forecast_window: 10     # ECMWF IFS forecast horizon (= forecast_horizon above)
+  total_seq_len: 40       # seq_len + forecast_window (informational)
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  batch_size: 8
+  lr: 0.001
+  num_epochs: 100
+  patience: 25
+  grad_clip: 1.0

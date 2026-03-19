@@ -1,0 +1,33 @@
+# SWOT-GNN v2 config — fixes for collapse-to-mean (too many zeros)
+#
+# Key changes from v1:
+#   dropout: 0.5 → 0.1   (was killing small hidden_dim=32 network → zero predictions)
+#   hidden_dim: 32 → 64  (more capacity to encode 30-step sequences)
+#   embed_dim: 64 → 128
+#   static_embed_dim: 32 → 64
+#   gps_layers_per_block: 3 → 2  (reduce over-smoothing on river network)
+#   lr: 0.005 → 0.001    (more stable Adam for LSTM; gradient clipping added in train.py)
+#   patience: 15 → 25    (v1 stopped too early at epoch 32)
+
+model:
+  swot_dim: 5       # SWOT features: obs_mask, latest_wse, days_since_last_obs, time_doy_sin, time_doy_cos
+  climate_dim: 7    # Climate forcing: LWd, P, Pres, RelHum, SWd, Temp, Wind
+  static_dim: 33    # Static reach attributes (encoded separately via StaticEncoder)
+  static_embed_dim: 64  # was 32; larger embedding for 33 static features
+  embed_dim: 128        # was 64
+  hidden_dim: 64        # was 32; hidden_size per LSTM direction = 32 (was 16 — too small)
+  st_blocks: 2
+  gps_layers_per_block: 2   # was 3; 3×2=6 GPS layers was over-smoothing
+  gps_heads: 4
+  dropout: 0.1             # was 0.5 — primary cause of collapse to zero predictions
+
+training:
+  seq_len: 30       # 30-day history window; forecast step appended automatically
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+  batch_size: 16
+  lr: 0.001         # was 0.005; lower LR + grad clipping (see train.py v2)
+  num_epochs: 100
+  patience: 25      # was 15; v1 stopped too early (epoch 32)
+  grad_clip: 1.0    # gradient clipping norm (new); prevents LSTM gradient explosion

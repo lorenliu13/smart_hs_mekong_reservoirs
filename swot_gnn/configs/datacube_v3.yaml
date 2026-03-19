@@ -1,0 +1,35 @@
+# SWOT-GNN v3 config — smaller model to reduce overfitting on ~70 training windows
+#
+# Key changes from v2:
+#   hidden_dim: 64 → 32      (halved; fewer LSTM parameters)
+#   embed_dim: 128 → 64      (proportional to hidden_dim)
+#   static_embed_dim: 64 → 32 (proportional to hidden_dim)
+#   st_blocks: 2 → 1         (single STBlock; removes second LSTM+GPS stage)
+#   gps_layers_per_block: 2 → 1  (single GPS layer; less graph over-smoothing)
+#
+# Rationale: v2 best val loss occurred at epoch 8 (out of 100), indicating the model
+# memorised training data faster than it could generalise. Reducing capacity forces
+# the model to learn transferable patterns rather than per-window shortcuts.
+
+model:
+  swot_dim: 5       # SWOT features: obs_mask, latest_wse, days_since_last_obs, time_doy_sin, time_doy_cos
+  climate_dim: 7    # Climate forcing: LWd, P, Pres, RelHum, SWd, Temp, Wind
+  static_dim: 33    # Static reach attributes (encoded separately via StaticEncoder)
+  static_embed_dim: 32   # v2: 64
+  embed_dim: 64          # v2: 128
+  hidden_dim: 32         # v2: 64
+  st_blocks: 1           # v2: 2
+  gps_layers_per_block: 1  # v2: 2
+  gps_heads: 4
+  dropout: 0.1
+
+training:
+  seq_len: 30
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+  batch_size: 16
+  lr: 0.001
+  num_epochs: 100
+  patience: 25
+  grad_clip: 1.0

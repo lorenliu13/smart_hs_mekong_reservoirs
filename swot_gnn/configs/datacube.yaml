@@ -1,0 +1,24 @@
+# SWOT-GNN config for segment-based forecasting
+# Dynamic features: 12 = swot_dim(5) + climate_dim(7), fed to LSTM per timestep via separate MLPs
+# Static features:  33, encoded separately via StaticEncoder → 32-dim embedding injected into every STBlock
+
+model:
+  swot_dim: 5       # SWOT features: obs_mask, latest_wse, days_since_last_obs, time_doy_sin, time_doy_cos
+  climate_dim: 7    # Climate forcing: LWd, P, Pres, RelHum, SWd, Temp, Wind
+  static_dim: 33    # Static reach attributes (encoded separately via StaticEncoder)
+  static_embed_dim: 32  # Embedding dim for static features (injected into every STBlock)
+  embed_dim: 64
+  hidden_dim: 32
+  st_blocks: 2
+  gps_layers_per_block: 3
+  gps_heads: 4
+  dropout: 0.5
+
+training:
+  seq_len: 30       # 30-day history window; forecast step appended automatically
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+  batch_size: 16
+  lr: 0.005
+  num_epochs: 100
