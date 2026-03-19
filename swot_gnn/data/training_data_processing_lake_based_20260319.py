@@ -10,7 +10,7 @@ Outputs three NetCDF files:
   3. swot_lake_static_datacube.nc
        dims (lake, feature) — placeholder zeros (static attrs to be added later)
 
-Plus a side file: lake_wse_norm_stats.csv (per-lake wse_mean, wse_std).
+Plus a side file: lake_wse_norm_stats.csv (per-lake lake_mean, lake_std).
 
 Run on the cluster where ERA5/ECMWF per-lake CSVs are available.
 
@@ -224,7 +224,7 @@ def build_swot_wse_arrays(
         lag_cube:                (n_lakes, n_dates) – days since last observation
         doy_sin_cube:            (n_lakes, n_dates) – sin(2π * doy / 365.25)
         doy_cos_cube:            (n_lakes, n_dates) – cos(2π * doy / 365.25)
-        norm_stats_df:           DataFrame with columns lake_id, wse_mean, wse_std
+        norm_stats_df:           DataFrame with columns lake_id, lake_mean, lake_std
         wse_std_cube:            (n_lakes, n_dates) – WSE std, NaN where not observed
         area_total_cube:         (n_lakes, n_dates) – total water area (m²), NaN where not observed
     """
@@ -236,15 +236,15 @@ def build_swot_wse_arrays(
     # ── Compute per-lake normalization statistics ────────────────────────────
     # wse_std is clipped to avoid division by zero for lakes with constant WSE.
     grp = swot_df.groupby("lake_id")["wse"]
-    wse_mean = grp.mean().rename("wse_mean")
-    wse_std  = grp.std().rename("wse_std").fillna(1.0).clip(lower=1e-8)
-    norm_stats_df = pd.DataFrame({"wse_mean": wse_mean, "wse_std": wse_std}).reset_index()
+    wse_mean = grp.mean().rename("lake_mean")
+    wse_std  = grp.std().rename("lake_std").fillna(1.0).clip(lower=1e-8)
+    norm_stats_df = pd.DataFrame({"lake_mean": wse_mean, "lake_std": wse_std}).reset_index()
 
     # Add anomaly and normalized WSE columns to the raw dataframe so the
     # caller can choose which form to store via wse_option.
     swot_df = swot_df.merge(norm_stats_df, on="lake_id", how="left")
-    swot_df["wse_anomaly"] = swot_df["wse"] - swot_df["wse_mean"]
-    swot_df["wse_norm"]    = swot_df["wse_anomaly"] / (swot_df["wse_std"] + 1e-8)
+    swot_df["wse_anomaly"] = swot_df["wse"] - swot_df["lake_mean"]
+    swot_df["wse_norm"]    = swot_df["wse_anomaly"] / (swot_df["lake_std"] + 1e-8)
 
     # ── Allocate output arrays ───────────────────────────────────────────────
     n_lakes = len(lake_ids) # number of lakes
@@ -486,7 +486,7 @@ def build_era5_dynamic_datacube(
     ds.to_netcdf(out_path)
     print(f"ERA5 dynamic datacube saved → {out_path}  shape: {len(lake_ids)} lakes × {len(all_dates)} days")
 
-    # Save per-lake wse_mean / wse_std so that predictions can be
+    # Save per-lake lake_mean / lake_std so that predictions can be
     # de-normalized back to real WSE (metres) during inference / evaluation.
     stats_path = save_dir / "lake_wse_norm_stats.csv"
     norm_stats_df.to_csv(stats_path, index=False)
