@@ -3,6 +3,7 @@ Baseline models for SWOT-GNN comparison.
 - Drainage-area ratio (Archfield & Vogel)
 - GPS-GNN: GNN only, no temporal LSTM
 - LSTM: 4-layer bi-LSTM, no graph
+- PersistenceBaseline: predict WSE(t+1) = WSE(t) (last observed value)
 """
 import torch
 import torch.nn as nn
@@ -49,6 +50,58 @@ def drainage_area_ratio(
         ratio = ungauged_darea[i] / (gauged_darea[g] + 1e-10)
         out[i, :] = gauged_discharge[g, :] * ratio
     return out.squeeze()
+
+
+class PersistenceBaseline:
+    """
+    Persistence (naive) baseline: predict WSE(t+1) = WSE(t).
+
+    Uses the most recent observed WSE for each lake as the forecast.
+    Serves as the simplest possible benchmark — any useful model should beat this.
+
+    Usage:
+        baseline = PersistenceBaseline()
+        preds = baseline.predict(wse)   # wse: (num_lakes, seq_len) or (num_lakes,)
+    """
+
+    def predict(self, wse: np.ndarray) -> np.ndarray:
+        """
+        Args:
+            wse: (num_lakes, seq_len) or (num_lakes,) — observed WSE time series.
+                 The last value along the time axis is used as the prediction.
+
+        Returns:
+            (num_lakes,) — predicted WSE at t+1 for each lake.
+        """
+        wse = np.asarray(wse)
+        if wse.ndim == 1:
+            # Already a single value per lake
+            return wse.copy()
+        # Take last timestep: (num_lakes, seq_len) -> (num_lakes,)
+        return wse[:, -1].copy()
+
+    def evaluate(
+        self,
+        wse: np.ndarray,
+        targets: np.ndarray,
+    ) -> dict:
+        """
+        Compute RMSE and MAE of the persistence forecast against true targets.
+
+        Args:
+            wse:     (num_lakes, seq_len) or (num_lakes,) — input WSE.
+            targets: (num_lakes,) — true WSE at t+1.
+
+        Returns:
+            dict with 'rmse' and 'mae'.
+        """
+        preds = self.predict(wse)
+        targets = np.asarray(targets)
+        diff = preds - targets
+        return {
+            "rmse": float(np.sqrt(np.mean(diff ** 2))),
+            "mae": float(np.mean(np.abs(diff))),
+        }
 
 
 class GPSGNN(nn.Module):

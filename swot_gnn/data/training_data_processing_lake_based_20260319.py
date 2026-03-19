@@ -63,7 +63,6 @@ LAKE_STATIC_ATTRS_CSV = Path(
 )
 # Columns to drop from the static attributes CSV before building the datacube
 STATIC_EXCLUDE_COLS = [
-    "lake_id",
     "domain",
     "mean_annual_discharge",
     "mean_sum_runoff",
