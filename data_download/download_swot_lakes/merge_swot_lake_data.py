@@ -1,129 +1,126 @@
 # import fiona
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 
 
-def process_year(year_str):
-    """Process all months for a given year and return a concatenated DataFrame and log messages.
-
-    For each month in the year, reads a pre-built file list CSV that enumerates
-    available SWOT lake shapefiles. All lakes in each shapefile are loaded and
-    geometry is dropped to produce a lightweight tabular record. Results are
-    accumulated across all months and returned alongside diagnostic log strings.
+def process_month(start_date, end_date, year_str, save_folder):
+    """Process all SWOT granules for a single month and write to a per-month CSV.
 
     Args:
-        year_str (str): Four-digit year string, e.g. '2024'.
+        start_date (str): Month start date string, e.g. '2024-03-01'.
+        end_date (str): Month end date string, e.g. '2024-04-01'.
+        year_str (str): Four-digit year string used to locate shapefiles on disk.
+        save_folder (str): Directory where the per-month CSV is written.
 
     Returns:
-        tuple: (year_str, year_df, logs)
-            - year_str: the input year string (used as a dict key by the caller)
-            - year_df: DataFrame of all SWOT lake observations for the year
+        tuple: (month_save_path, total_rows, logs)
+            - month_save_path: path of the CSV written
+            - total_rows: number of rows written
             - logs: list of log message strings for printing
     """
-    # Build the start/end bounds for monthly iteration over this year
-    start_month = datetime(int(year_str), 1, 1)
-    end_month = datetime(int(year_str) + 1, 1, 1)
+    month_label = start_date[:7]  # e.g. '2024-03'
+    month_save_path = save_folder + f"/swot_lake_df_{month_label}.csv"
 
-    # Clamp to the overall study period: Dec 2023 – Dec 2025
-    start_month = max(start_month, datetime(2023, 12, 1))
-    end_month = min(end_month, datetime(2025, 12, 1))
+    file_list_path = (
+        f"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/"
+        f"{start_date}_{end_date}_swot_lake_file_df.csv"
+    )
+    swot_file_df = pd.read_csv(file_list_path)
 
-    year_df = pd.DataFrame()  # accumulator for all monthly data within this year
-    logs = []
-    current_month = start_month
+    logs = [f"  [{month_label}] {start_date} to {end_date}: {swot_file_df.shape[0]} files found"]
+    total_rows = 0
+    header_written = False
 
-    # Iterate month-by-month through the clamped date range
-    while current_month < end_month:
-        month_end = current_month + relativedelta(months=1)
-        start_date = current_month.strftime('%Y-%m-%d')
-        end_date = month_end.strftime('%Y-%m-%d')
+    for index in range(swot_file_df.shape[0]):
+        curr_url = swot_file_df['url'].values[index]
+        # Derive the local filename by stripping the URL path and .zip extension
+        filename = os.path.basename(curr_url)[:-4]
 
-        # Read the pre-built file list CSV for this month, which contains URLs
-        # to each SWOT granule (shapefile directory) covering the Mekong basin
-        file_list_path = f"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/file_list/{start_date}_{end_date}_swot_lake_file_df.csv"
-        swot_file_df = pd.read_csv(file_list_path)
-        logs.append(f"  [Year {year_str}] {start_date} to {end_date}: {swot_file_df.shape[0]} files found")
+        # Only process "Prior" lake product files (PLD-based observations);
+        # skip other product types (e.g. observed-only granules)
+        if 'Prior' not in filename:
+            continue
 
-        # Process each SWOT granule file listed for this month
-        for index in range(swot_file_df.shape[0]):
-            curr_url = swot_file_df['url'].values[index]
-            # Derive the local filename by stripping the URL path and .zip extension
-            filename = os.path.basename(curr_url)[:-4]
+        # Construct the expected path to the shapefile on disk
+        file_path = f"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/{year_str}/{filename}"
+        shp_path = file_path + "/" + f"{filename}.shp"
 
-            # Only process "Prior" lake product files (PLD-based observations);
-            # skip other product types (e.g. observed-only granules)
-            if 'Prior' not in filename:
-                continue
+        # Skip granules that haven't been downloaded yet
+        if not os.path.exists(shp_path):
+            logs.append(f"    [{index+1}/{swot_file_df.shape[0]}] SKIPPED (missing): {filename}")
+            continue
 
-            # Construct the expected path to the shapefile on disk
-            file_path = f"/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes/{year_str}/{filename}"
-            shp_path = file_path + "/" + f"{filename}.shp"
+        # Read the shapefile — all lakes in the granule are kept
+        swot_lake_df = gpd.read_file(shp_path)
 
-            # Skip granules that haven't been downloaded yet
-            if not os.path.exists(shp_path):
-                logs.append(f"    [{index+1}/{swot_file_df.shape[0]}] SKIPPED (missing): {filename}")
-                continue
+        # Drop geometry column — only tabular attributes are needed downstream
+        swot_lake_df = swot_lake_df.drop(columns=['geometry'])
 
-            # Read the shapefile — all lakes in the granule are kept
-            swot_lake_df = gpd.read_file(shp_path)
+        # Write directly to CSV (append after the first granule) to avoid
+        # accumulating a large in-memory DataFrame across all granules
+        swot_lake_df.to_csv(month_save_path, mode='a', header=not header_written, index=False)
+        header_written = True
+        total_rows += len(swot_lake_df)
+        logs.append(f"    [{index+1}/{swot_file_df.shape[0]}] {filename}: {swot_lake_df.shape[0]} lakes")
 
-            # Drop geometry column — only tabular attributes are needed downstream
-            swot_lake_df = swot_lake_df.drop(columns=['geometry'])
-
-            # Append this granule's filtered rows to the year accumulator
-            year_df = pd.concat([year_df, swot_lake_df], axis=0, ignore_index=True)
-            logs.append(f"    [{index+1}/{swot_file_df.shape[0]}] {filename}: {swot_lake_df.shape[0]} lakes")
-
-        current_month += relativedelta(months=1)
-
-    logs.append(f"  [Year {year_str}] Done — {year_df.shape[0]} rows collected")
-    return year_str, year_df, logs
+    logs.append(f"  [{month_label}] Done — {total_rows} rows written to {month_save_path}")
+    return month_save_path, total_rows, logs
 
 
 # --- Main: merge SWOT lake data from Dec 2023 to Dec 2025 into a single CSV ---
 
-# Output directory for per-year and combined CSV files
+# Output directory for per-month and combined CSV files
 save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/mekong_river_basin/swot/lakes"
-years = ['2023', '2024', '2025']
 
-print(f"\nProcessing {len(years)} years in parallel: {years}")
+# Build the full list of months in the study period: Dec 2023 – Dec 2025
+study_start = datetime(2023, 12, 1)
+study_end = datetime(2025, 12, 1)
+months = []
+current = study_start
+while current < study_end:
+    months.append(current)
+    current += relativedelta(months=1)
 
-# Process each year in parallel using one worker process per year.
-# Each worker reads, filters, and concatenates SWOT shapefiles independently.
-year_dfs = {}
-with ProcessPoolExecutor(max_workers=len(years)) as executor:
-    futures = {executor.submit(process_year, y): y for y in years}
-    for future in as_completed(futures):
-        year_str, year_df, logs = future.result()
-        print("\n".join(logs), flush=True)
-        year_dfs[year_str] = year_df
+print(f"\nProcessing {len(months)} months sequentially")
 
-        # Save an intermediate per-year CSV so progress is not lost if the
-        # final concatenation step fails
-        year_save_path = save_folder + f"/swot_lake_df_{year_str}.csv"
-        year_df.to_csv(year_save_path, index=False)
-        print(f"Saved year {year_str}: {year_df.shape[0]} rows -> {year_save_path}", flush=True)
+# Process each month independently, writing a per-month CSV
+month_save_paths = []
+for month_dt in months:
+    month_end_dt = month_dt + relativedelta(months=1)
+    start_date = month_dt.strftime('%Y-%m-%d')
+    end_date = month_end_dt.strftime('%Y-%m-%d')
+    year_str = month_dt.strftime('%Y')
 
-# Concatenate all years in chronological order into a single DataFrame
-full_swot_lake_df = pd.concat([year_dfs[y] for y in sorted(year_dfs)], axis=0, ignore_index=True)
+    month_save_path, total_rows, logs = process_month(start_date, end_date, year_str, save_folder)
+    print("\n".join(logs), flush=True)
+    month_save_paths.append(month_save_path)
 
-# Remove rows where WSE (water surface elevation) is the SWOT fill/no-data value
-print(f"\nTotal rows before filtering: {full_swot_lake_df.shape[0]}")
-full_swot_lake_df = full_swot_lake_df[full_swot_lake_df['wse'] != -999999999999.0]
-print(f"Total rows after removing invalid WSE: {full_swot_lake_df.shape[0]}")
-
-# Parse the time string column and extract a plain date column for easier grouping
-full_swot_lake_df['time_str'] = pd.to_datetime(full_swot_lake_df['time_str'])
-full_swot_lake_df['date'] = full_swot_lake_df['time_str'].dt.date
-
-# Save the full merged dataset
+# Build the final merged CSV by reading one month at a time, filtering, and
+# appending — so only one month is held in memory at any point.
 save_path = save_folder + "/" + "full_swot_lake_df_2023_2025.csv"
-full_swot_lake_df.to_csv(save_path, index=False)
-print(f"\nSaved {full_swot_lake_df.shape[0]} rows to {save_path}")
+header_written = False
+total_rows = 0
+for month_save_path in month_save_paths:
+    if not os.path.exists(month_save_path):
+        print(f"Skipping missing file: {month_save_path}", flush=True)
+        continue
+    month_df = pd.read_csv(month_save_path)
+
+    # Remove rows where WSE (water surface elevation) is the SWOT fill/no-data value
+    month_df = month_df[month_df['wse'] != -999999999999.0]
+
+    # Parse the time string column and extract a plain date column for easier grouping
+    month_df['time_str'] = pd.to_datetime(month_df['time_str'])
+    month_df['date'] = month_df['time_str'].dt.date
+
+    month_df.to_csv(save_path, mode='a', header=not header_written, index=False)
+    header_written = True
+    total_rows += len(month_df)
+    del month_df  # free memory before loading the next month
+
+print(f"\nSaved {total_rows} rows to {save_path}")
