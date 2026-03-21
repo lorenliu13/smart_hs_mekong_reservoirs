@@ -65,6 +65,7 @@ def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
         swot_lake_df = swot_lake_df.drop(columns=['geometry'])
 
         # Keep only lakes whose lake_id appears in the GRIT reaches CSV
+        swot_lake_df['lake_id'] = swot_lake_df['lake_id'].astype(int)
         swot_lake_df = swot_lake_df[swot_lake_df['lake_id'].isin(valid_lake_ids)]
 
         # Write directly to CSV (append after the first granule) to avoid
