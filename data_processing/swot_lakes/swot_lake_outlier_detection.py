@@ -186,17 +186,7 @@ n_roll = df["flag_rolling"].sum()
 print(f"  Rolling MAD flags  : {n_roll:,}  ({n_roll/len(df)*100:.2f}%)")
 
 # =============================================================================
-# 5. Cross-variable consistency: wse_std / wse_u ratio
-# =============================================================================
-print("[4/4] Cross-variable consistency ...")
-df["std_u_ratio"] = df["wse_std"] / df["wse_u"].replace(0, np.nan)
-ratio_thresh = df["std_u_ratio"].quantile(0.99)
-df["flag_std_u"] = df["std_u_ratio"] > ratio_thresh
-print(f"  wse_std/wse_u p99 threshold : {ratio_thresh:.2f}")
-print(f"  flag_std_u count            : {df['flag_std_u'].sum():,}")
-
-# =============================================================================
-# 6. Consensus flag (>=2 methods)
+# 5. Consensus flag (>=2 methods)
 # =============================================================================
 print("\nBuilding consensus flag ...")
 
@@ -244,8 +234,8 @@ export_cols = [
     "lake_id", "date", "wse", "wse_u", "wse_std",
     "area_total", "dark_frac", "xtrk_dist", "quality_f",
     "p_lon", "p_lat", "lake_name",
-    "z_lake", "wse_seasonal_resid", "std_u_ratio",
-    "flag_z", "flag_iqr", "flag_seasonal", "flag_rolling", "flag_std_u",
+    "z_lake", "wse_seasonal_resid",
+    "flag_z", "flag_iqr", "flag_seasonal", "flag_rolling",
     "n_flags", "outlier",
 ]
 export_cols = [c for c in export_cols if c in df.columns]
@@ -267,7 +257,6 @@ per_lake_summary = (
         n_flag_iqr      =("flag_iqr",      "sum"),
         n_flag_seasonal =("flag_seasonal", "sum"),
         n_flag_rolling  =("flag_rolling",  "sum"),
-        n_flag_std_u    =("flag_std_u",    "sum"),
         wse_mean        =("wse",           "mean"),
         wse_std         =("wse",           "std"),
         wse_median      =("wse",           "median"),
