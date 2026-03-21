@@ -6,6 +6,8 @@ from dateutil.relativedelta import relativedelta
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+SWOT_FILL_VALUE = -999_999_999_999.0
+
 
 
 
@@ -128,27 +130,24 @@ with ProcessPoolExecutor(max_workers=12) as executor:
 # Sort paths chronologically before merging
 month_save_paths.sort()
 
-# Build the final merged CSV by reading one month at a time, filtering, and
-# appending — so only one month is held in memory at any point.
-save_path = save_folder + "/" + "full_swot_lake_df_2023_2025.csv"
-header_written = False
-total_rows = 0
+save_path = os.path.join(save_folder, "full_swot_lake_df_2023_2025.csv")
+monthly_dfs = []
 for month_save_path in month_save_paths:
-    if not os.path.exists(month_save_path):
+    try:
+        month_df = pd.read_csv(month_save_path)
+    except FileNotFoundError:
         print(f"Skipping missing file: {month_save_path}", flush=True)
         continue
-    month_df = pd.read_csv(month_save_path)
 
     # Remove rows where WSE (water surface elevation) is the SWOT fill/no-data value
-    month_df = month_df[month_df['wse'] != -999999999999.0]
+    month_df = month_df[month_df['wse'] != SWOT_FILL_VALUE]
 
     # Parse the time string column and extract a plain date column for easier grouping
     month_df['time_str'] = pd.to_datetime(month_df['time_str'])
     month_df['date'] = month_df['time_str'].dt.date
 
-    month_df.to_csv(save_path, mode='a', header=not header_written, index=False)
-    header_written = True
-    total_rows += len(month_df)
-    del month_df  # free memory before loading the next month
+    monthly_dfs.append(month_df)
 
-print(f"\nSaved {total_rows} rows to {save_path}")
+full_df = pd.concat(monthly_dfs, ignore_index=True)
+full_df.to_csv(save_path, index=False)
+print(f"\nSaved {len(full_df)} rows to {save_path}")
