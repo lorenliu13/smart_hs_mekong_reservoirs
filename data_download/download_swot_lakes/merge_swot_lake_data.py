@@ -36,8 +36,7 @@ def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
     swot_file_df = pd.read_csv(file_list_path)
 
     logs = [f"  [{month_label}] {start_date} to {end_date}: {swot_file_df.shape[0]} files found"]
-    total_rows = 0
-    header_written = False
+    granule_dfs = []
 
     for index in range(swot_file_df.shape[0]):
         curr_url = swot_file_df['url'].values[index]
@@ -68,12 +67,16 @@ def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
         swot_lake_df['lake_id'] = swot_lake_df['lake_id'].astype(int)
         swot_lake_df = swot_lake_df[swot_lake_df['lake_id'].isin(valid_lake_ids)]
 
-        # Write directly to CSV (append after the first granule) to avoid
-        # accumulating a large in-memory DataFrame across all granules
-        swot_lake_df.to_csv(month_save_path, mode='a', header=not header_written, index=False)
-        header_written = True
-        total_rows += len(swot_lake_df)
+        granule_dfs.append(swot_lake_df)
         logs.append(f"    [{index+1}/{swot_file_df.shape[0]}] {filename}: {swot_lake_df.shape[0]} lakes")
+
+    # Concatenate all granules and write once
+    if granule_dfs:
+        month_df = pd.concat(granule_dfs, ignore_index=True)
+        month_df.to_csv(month_save_path, index=False)
+        total_rows = len(month_df)
+    else:
+        total_rows = 0
 
     logs.append(f"  [{month_label}] Done — {total_rows} rows written to {month_save_path}")
     return month_save_path, total_rows, logs
