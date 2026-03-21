@@ -4,11 +4,12 @@ import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 
 
-def process_month(start_date, end_date, year_str, save_folder):
+def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
     """Process all SWOT granules for a single month and write to a per-month CSV.
 
     Args:
@@ -16,6 +17,8 @@ def process_month(start_date, end_date, year_str, save_folder):
         end_date (str): Month end date string, e.g. '2024-04-01'.
         year_str (str): Four-digit year string used to locate shapefiles on disk.
         save_folder (str): Directory where the per-month CSV is written.
+        valid_lake_ids (set): Set of lake_id values from the GRIT reaches CSV;
+            only rows whose lake_id appears in this set are retained.
 
     Returns:
         tuple: (month_save_path, total_rows, logs)
@@ -61,6 +64,9 @@ def process_month(start_date, end_date, year_str, save_folder):
         # Drop geometry column — only tabular attributes are needed downstream
         swot_lake_df = swot_lake_df.drop(columns=['geometry'])
 
+        # Keep only lakes whose lake_id appears in the GRIT reaches CSV
+        swot_lake_df = swot_lake_df[swot_lake_df['lake_id'].isin(valid_lake_ids)]
+
         # Write directly to CSV (append after the first granule) to avoid
         # accumulating a large in-memory DataFrame across all granules
         swot_lake_df.to_csv(month_save_path, mode='a', header=not header_written, index=False)
@@ -77,6 +83,13 @@ def process_month(start_date, end_date, year_str, save_folder):
 # Output directory for per-month and combined CSV files
 save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/mekong_river_basin/swot/lakes"
 
+# Load the set of valid lake IDs from the GRIT reaches CSV; only observations
+# for these lakes will be retained from each SWOT granule
+grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_mekong_basin_with_pld_lakes.csv"
+grit_reaches_df = pd.read_csv(grit_reaches_path, usecols=['lake_id'])
+valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
+print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")
+
 # Build the full list of months in the study period: Dec 2023 – Dec 2025
 study_start = datetime(2023, 12, 1)
 study_end = datetime(2025, 12, 1)
@@ -86,19 +99,30 @@ while current < study_end:
     months.append(current)
     current += relativedelta(months=1)
 
-print(f"\nProcessing {len(months)} months sequentially")
+print(f"\nProcessing {len(months)} months in parallel (max 12 workers)")
 
-# Process each month independently, writing a per-month CSV
+# Build the argument list for each month
+month_args = [
+    (month_dt.strftime('%Y-%m-%d'),
+     (month_dt + relativedelta(months=1)).strftime('%Y-%m-%d'),
+     month_dt.strftime('%Y'),
+     save_folder,
+     valid_lake_ids)
+    for month_dt in months
+]
+
+# Process months in parallel — each writes to its own file so there are no
+# race conditions. Results arrive out of order; collect and sort afterwards.
 month_save_paths = []
-for month_dt in months:
-    month_end_dt = month_dt + relativedelta(months=1)
-    start_date = month_dt.strftime('%Y-%m-%d')
-    end_date = month_end_dt.strftime('%Y-%m-%d')
-    year_str = month_dt.strftime('%Y')
+with ProcessPoolExecutor(max_workers=12) as executor:
+    futures = {executor.submit(process_month, *args): args[0] for args in month_args}
+    for future in as_completed(futures):
+        month_save_path, total_rows, logs = future.result()
+        print("\n".join(logs), flush=True)
+        month_save_paths.append(month_save_path)
 
-    month_save_path, total_rows, logs = process_month(start_date, end_date, year_str, save_folder)
-    print("\n".join(logs), flush=True)
-    month_save_paths.append(month_save_path)
+# Sort paths chronologically before merging
+month_save_paths.sort()
 
 # Build the final merged CSV by reading one month at a time, filtering, and
 # appending — so only one month is held in memory at any point.
