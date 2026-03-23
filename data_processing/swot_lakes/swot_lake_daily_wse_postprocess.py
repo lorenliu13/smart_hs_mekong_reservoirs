@@ -1,24 +1,20 @@
 """
-SWOT Lake WSE — Post-processing: Lake-graph filter + Daily aggregation
-======================================================================
+SWOT Lake WSE — Post-processing: Daily aggregation
+===================================================
 Steps:
   1. Load outlier-flagged SWOT lake WSE data.
-  2. Keep only lakes present in the GRIT lake-graph (excl. terminal node -1).
-  3. Remove confirmed outlier observations (outlier == True).
-  4. Aggregate valid sub-daily / multi-pass observations to daily scale.
+  2. Remove confirmed outlier observations (outlier == True).
+  3. Aggregate valid sub-daily / multi-pass observations to daily scale.
+  4. Discard lakes with fewer than 10 daily observations.
   5. Export final daily SWOT Lake WSE CSV.
 
 Input:
   E:/Project_2025_2026/Smart_hs/processed_data/swot/mekong_river_basin/swot/lakes
     /swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv
 
-Lake graph:
-  E:/Project_2025_2026/Smart_hs/raw_data/grit/GRIT_mekong_mega_reservoirs
-    /reservoirs/gritv06_pld_lake_graph_0sqkm.csv
-
 Output:
   E:/Project_2025_2026/Smart_hs/processed_data/swot/mekong_river_basin/swot/lakes
-    /swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_graph_lakes.csv
+    /swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv
 """
 
 import warnings
@@ -33,34 +29,16 @@ OUTLIER_CSV = Path(
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
     r"\swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
 )
-LAKE_GRAPH_PATH = Path(
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    r"\gritv06_pld_lake_graph_0sqkm.csv"
-)
+
 OUTPUT_DIR = Path(
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes_daily"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_CSV = OUTPUT_DIR / "swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_lake_graph_0sqkm.csv"
-
-TERMINAL_NODE_ID = -1
+OUTPUT_CSV = OUTPUT_DIR / "swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
 
 # =============================================================================
-# 1. Load lake graph — extract valid lake IDs
-# =============================================================================
-print("Loading lake graph ...")
-lake_graph = pd.read_csv(LAKE_GRAPH_PATH)
-graph_lake_ids = set(
-    lake_graph.loc[lake_graph["lake_id"] != TERMINAL_NODE_ID, "lake_id"]
-    .dropna()
-    .astype("int64")
-)
-print(f"  Graph lakes (excl. terminal): {len(graph_lake_ids):,}")
-
-# =============================================================================
-# 2. Load outlier-flagged data
+# 1. Load outlier-flagged data
 # =============================================================================
 print("Loading outlier-flagged SWOT data ...")
 df = pd.read_csv(OUTLIER_CSV, low_memory=False)
@@ -70,17 +48,7 @@ print(f"  Total rows     : {len(df):,}")
 print(f"  Unique lakes   : {df['lake_id'].nunique():,}")
 
 # =============================================================================
-# 3. Filter to lake-graph lakes only
-# =============================================================================
-print("Filtering to lake-graph lakes ...")
-before = len(df)
-df = df[df["lake_id"].isin(graph_lake_ids)].copy()
-after = len(df)
-print(f"  Rows kept      : {after:,}  (dropped {before - after:,})")
-print(f"  Unique lakes   : {df['lake_id'].nunique():,}")
-
-# =============================================================================
-# 4. Remove confirmed outliers
+# 2. Remove confirmed outliers
 # =============================================================================
 print("Removing confirmed outliers ...")
 n_outlier = df["outlier"].sum()
@@ -90,7 +58,7 @@ print(f"  Valid obs remaining : {len(df_clean):,}")
 print(f"  Unique lakes        : {df_clean['lake_id'].nunique():,}")
 
 # =============================================================================
-# 5. Daily aggregation
+# 4. Daily aggregation
 # =============================================================================
 print("Aggregating to daily scale ...")
 
@@ -128,6 +96,18 @@ print(f"  Unique lakes   : {daily['lake_id'].nunique():,}")
 print(f"  Date range     : {daily['date'].min().date()} – {daily['date'].max().date()}")
 print(f"  Multi-pass days: {(daily['n_passes'] > 1).sum():,}  "
       f"(max {daily['n_passes'].max()} passes/day)")
+
+# =============================================================================
+# 5. Discard lakes with fewer than 10 daily observations
+# =============================================================================
+print("Filtering lakes by minimum daily observation count ...")
+lake_counts = daily.groupby("lake_id")["date"].count()
+valid_lakes  = lake_counts[lake_counts >= 10].index
+before = daily["lake_id"].nunique()
+daily  = daily[daily["lake_id"].isin(valid_lakes)].copy()
+print(f"  Lakes before   : {before:,}")
+print(f"  Lakes retained : {daily['lake_id'].nunique():,}  (dropped {before - daily['lake_id'].nunique():,})")
+print(f"  Daily rows     : {len(daily):,}")
 
 # =============================================================================
 # 6. Export
