@@ -91,7 +91,7 @@ save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_meko
 
 # Load the set of valid lake IDs from the GRIT reaches CSV; only observations
 # for these lakes will be retained from each SWOT granule
-grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_great_mekong_basin_with_pld_lakes.csv"
+grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_great_mekong_with_lake_id.csv"
 grit_reaches_df = pd.read_csv(grit_reaches_path, usecols=['lake_id'])
 # load the lake ids
 lake_ids = pd.to_numeric(grit_reaches_df['lake_id'], errors='coerce')
@@ -101,8 +101,8 @@ valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
 print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")
 
 # Build the full list of months in the study period: Dec 2023 – Dec 2025
-study_start = datetime(2023, 12, 1)
-study_end = datetime(2025, 12, 1)
+study_start = datetime(2025, 1, 1)
+study_end = datetime(2025, 5, 1)
 months = []
 current = study_start
 while current < study_end:
