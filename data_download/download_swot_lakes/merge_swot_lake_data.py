@@ -92,6 +92,10 @@ save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_meko
 # for these lakes will be retained from each SWOT granule
 grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_great_mekong_basin_with_pld_lakes.csv"
 grit_reaches_df = pd.read_csv(grit_reaches_path, usecols=['lake_id'])
+# load the lake ids
+lake_ids = pd.to_numeric(grit_reaches_df['lake_id'], errors='coerce')
+# drop the nan
+lake_ids = lake_ids[~np.isnan(lake_ids)]
 valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
 print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")
 
