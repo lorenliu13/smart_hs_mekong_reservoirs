@@ -9,8 +9,9 @@ PLD_SHP   = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reser
 REACH_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_basin.shp"
 
 # --- Output paths ---
-OUTPUT_GPKG = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_with_lake_id.gpkg"
-OUTPUT_CSV  = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_with_lake_id.csv"
+OUTPUT_GPKG    = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_with_lake_id.gpkg"
+OUTPUT_CSV     = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_with_lake_id.csv"
+OUTPUT_PLD_GPKG = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database\swot_prior_lake_database_great_mekong_overlap_with_grit.gpkg"
 
 # --- Column name in PLD that holds the lake identifier ---
 PLD_LAKE_ID_COL = "lake_id"   # <-- adjust to actual column name in your PLD shapefile
@@ -82,6 +83,12 @@ def main():
 
     print(f"Saving CSV to {OUTPUT_CSV} ...")
     joined.drop(columns="geometry").to_csv(OUTPUT_CSV, index=False)
+
+    # Save PLD lakes that overlap with at least one GRIT reach
+    matched_lake_ids = joined["lake_id"].dropna().unique()
+    pld_overlap = pld[pld[PLD_LAKE_ID_COL].isin(matched_lake_ids)]
+    print(f"Saving {len(pld_overlap)} overlapping PLD lakes to {OUTPUT_PLD_GPKG} ...")
+    pld_overlap.to_file(OUTPUT_PLD_GPKG, driver="GPKG")
 
     print("Done.")
 

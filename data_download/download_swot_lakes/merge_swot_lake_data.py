@@ -86,7 +86,7 @@ def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
 # --- Main: merge SWOT lake data from Dec 2023 to Dec 2025 into a single CSV ---
 
 # Output directory for per-month and combined CSV files
-save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_mekong_river_basin/swot/lakes"
+save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_mekong_river_basin/lakes"
 
 # Load the set of valid lake IDs from the GRIT reaches CSV; only observations
 # for these lakes will be retained from each SWOT granule
