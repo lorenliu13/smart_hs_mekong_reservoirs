@@ -10,7 +10,6 @@ SWOT_FILL_VALUE = -999_999_999_999.0
 
 
 
-
 def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
     """Process all SWOT granules for a single month and write to a per-month CSV.
 
@@ -87,11 +86,11 @@ def process_month(start_date, end_date, year_str, save_folder, valid_lake_ids):
 # --- Main: merge SWOT lake data from Dec 2023 to Dec 2025 into a single CSV ---
 
 # Output directory for per-month and combined CSV files
-save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/mekong_river_basin/swot/lakes"
+save_folder = r"/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_mekong_river_basin/swot/lakes"
 
 # Load the set of valid lake IDs from the GRIT reaches CSV; only observations
 # for these lakes will be retained from each SWOT granule
-grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_mekong_basin_with_pld_lakes.csv"
+grit_reaches_path = "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches/gritv06_reaches_great_mekong_basin_with_pld_lakes.csv"
 grit_reaches_df = pd.read_csv(grit_reaches_path, usecols=['lake_id'])
 valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
 print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")

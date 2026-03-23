@@ -59,7 +59,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 5   # Only analyse lakes with poly_area > this value (sq km)
+LAKE_AREA_THRESHOLD_SQKM = 0   # Only analyse lakes with poly_area > this value (sq km)
 TERMINAL_NODE_ID = -1            # Sentinel lake_id for the most-downstream river node
 OUTLET_REACH_FID = 330187369     # Explicitly specified main-stem river outlet reach.
                                  # Overrides auto-detection (which picks up isolated
@@ -82,9 +82,9 @@ OUTPUT_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
     rf"\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
-SWOT_QC_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
-    r"\swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv"
+SWOT_DAILY_CSV = (
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes_daily"
+    r"\swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
 )
 
 # ---------------------------------------------------------------------------
@@ -108,12 +108,12 @@ print(
     f"after poly_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
 )
 
-# Keep only lakes that have WSE observations in the SWOT QC file
-swot_qc = pd.read_csv(SWOT_QC_CSV, usecols=["lake_id"])
-swot_lake_ids: set[int] = set(swot_qc["lake_id"].astype("int64").unique())
+# Keep only lakes that have WSE observations in the SWOT daily data file
+swot_daily = pd.read_csv(SWOT_DAILY_CSV, usecols=["lake_id"])
+swot_lake_ids: set[int] = set(swot_daily["lake_id"].astype("int64").unique())
 valid_lake_ids &= swot_lake_ids
 print(
-    f"SWOT QC lakes with WSE: {len(swot_lake_ids)}, "
+    f"SWOT daily lakes with WSE: {len(swot_lake_ids)}, "
     f"after intersecting with area filter: {len(valid_lake_ids)}"
 )
 

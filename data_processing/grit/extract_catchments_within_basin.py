@@ -6,11 +6,11 @@ and save as a shapefile.
 import geopandas as gpd
 
 # --- Input paths ---
-BASIN_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\basin_shapefile\mekong_river_basin.shp"
+BASIN_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\basin_shapefile\GM_boundary_geometry_fixed.shp"
 CATCHMENTS_GPKG = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\Grit_ARC\output_v06\catchments\GRITv06_segment_catchments_AS_EPSG4326.gpkg"
 
 # --- Output path ---
-OUTPUT_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\catchments\GRITv06_catchments_mekong.shp"
+OUTPUT_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\catchments\GRITv06_catchments_great_mekong.shp"
 
 
 def main():
