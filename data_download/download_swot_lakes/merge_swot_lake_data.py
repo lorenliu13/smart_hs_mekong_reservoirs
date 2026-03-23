@@ -101,8 +101,8 @@ valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
 print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")
 
 # Build the full list of months in the study period: Dec 2023 – Dec 2025
-study_start = datetime(2025, 1, 1)
-study_end = datetime(2025, 5, 1)
+study_start = datetime(2023, 12, 1)
+study_end = datetime(2025, 12, 1)
 months = []
 current = study_start
 while current < study_end:

@@ -81,8 +81,9 @@ def run_task(task):
 if __name__ == "__main__":
 
     # Start from December 2023 to September 2025
-    start_month = datetime(2023, 12, 1)
-    end_month = datetime(2025, 12, 1)
+    # start_month = datetime(2023, 12, 1)
+    start_month = datetime(2025, 12, 1)
+    end_month = datetime(2026, 3, 1)
 
     # Generate list of start_date and end_date pairs
     date_pairs = []
