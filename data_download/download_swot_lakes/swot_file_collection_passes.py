@@ -163,7 +163,7 @@ if __name__ == '__main__':
     # start_month = datetime(2025, 4, 1)
     # start_month = datetime(2025, 11, 1)
     start_month = datetime(2023, 12, 1)
-    end_month = datetime(2025, 12, 1)
+    end_month = datetime(2026, 2, 1)
 
     # Generate list of start_date and end_date pairs
     date_pairs = []
