@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=merge_swot_lake_data          # Name of your job
-#SBATCH --output=merge_swot_lake_data.out        # Standard output file
-#SBATCH --error=merge_swot_lake_data.err         # Standard error file
+#SBATCH --job-name=monthly_swot_lake_data          # Name of your job
+#SBATCH --output=monthly_swot_lake_data.out        # Standard output file
+#SBATCH --error=monthly_swot_lake_data.err         # Standard error file
 #SBATCH --nodes=1                         # Request one node
 #SBATCH --ntasks=1                        # Request one task
 #SBATCH --cpus-per-task=12                # Request 10 CPUs per task
@@ -14,4 +14,4 @@ module load Anaconda3
 conda activate $DATA/py311
 
 # Run the download script
-python merge_swot_lake_data.py
+python monthly_swot_lake_data.py
