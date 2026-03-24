@@ -100,12 +100,12 @@ lake_ids = lake_ids[~np.isnan(lake_ids)]
 valid_lake_ids = set(grit_reaches_df['lake_id'].dropna().unique())
 print(f"Loaded {len(valid_lake_ids)} unique lake IDs from GRIT reaches CSV")
 
-# Build the full list of months in the study period: Dec 2023 – Dec 2025
-study_start = datetime(2023, 12, 1)
-study_end = datetime(2025, 12, 1)
+# Build the full list of months in the study period (both ends inclusive)
+start_month = datetime(2025, 12, 1)
+end_month = datetime(2026, 2, 1)  # inclusive: last month processed is end_month
 months = []
-current = study_start
-while current < study_end:
+current = start_month
+while current <= end_month:
     months.append(current)
     current += relativedelta(months=1)
 
@@ -134,7 +134,7 @@ with ProcessPoolExecutor(max_workers=12) as executor:
 # Sort paths chronologically before merging
 month_save_paths.sort()
 
-save_path = os.path.join(save_folder, "full_swot_lake_df_2023_2025.csv")
+save_path = os.path.join(save_folder, "full_swot_lake_df_2025_12_2026_02.csv")
 monthly_dfs = []
 for month_save_path in month_save_paths:
     try:

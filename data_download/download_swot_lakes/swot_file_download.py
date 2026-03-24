@@ -80,16 +80,14 @@ def run_task(task):
 
 if __name__ == "__main__":
 
-    # Start from December 2023 to September 2025
-    # start_month = datetime(2023, 12, 1)
     start_month = datetime(2025, 12, 1)
-    end_month = datetime(2026, 3, 1)
+    end_month = datetime(2026, 2, 1)  # inclusive: last month processed is end_month
 
     # Generate list of start_date and end_date pairs
     date_pairs = []
     current_month = start_month
-    
-    while current_month < end_month:
+
+    while current_month <= end_month:
         # Calculate the start and end of the current month
         month_start = current_month
         month_end = current_month + relativedelta(months=1) # - timedelta(days=1)
