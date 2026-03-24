@@ -53,7 +53,9 @@ STEPS = (
 )
 
 START_YEAR = 2026
+START_MONTH = 1
 END_YEAR   = 2026
+END_MONTH = 2
 
 OUTDIR = Path("/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres")
 # OUTDIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\ecmwf_ifs\hres")
@@ -158,9 +160,9 @@ def download_month(server: ECMWFService, year: int, month: int, outdir: Path) ->
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download ECMWF IFS HRES forecasts.")
     parser.add_argument("--start-year",  type=int, default=START_YEAR)
-    parser.add_argument("--start-month", type=int, default=1)
+    parser.add_argument("--start-month", type=int, default=START_MONTH)
     parser.add_argument("--end-year",    type=int, default=END_YEAR)
-    parser.add_argument("--end-month",   type=int, default=12)
+    parser.add_argument("--end-month",   type=int, default=END_MONTH)
     parser.add_argument("--outdir",      type=Path, default=OUTDIR,
                         help="Output root directory (default: cluster path in script)")
     args = parser.parse_args()

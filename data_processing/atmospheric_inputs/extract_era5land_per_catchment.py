@@ -74,12 +74,12 @@ DAILY_DIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\era5_land_daily")
 CATCHMENT_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
+    rf"\gritv06_great_mekong_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
 )
 LAKE_CENTROIDS_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 OUTPUT_DIR = Path(
     rf"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs"
@@ -91,7 +91,7 @@ START_YEAR  = 2024
 START_MONTH = 1
 END_YEAR    = 2024
 END_MONTH   = 1
-OVERWRITE   = False  # set True to reprocess months that already have a CSV
+OVERWRITE   = True  # set True to reprocess months that already have a CSV
 N_WORKERS   = 8      # number of parallel worker processes
 
 # ---------------------------------------------------------------------------
@@ -280,12 +280,15 @@ def extract_lake_values(
     Returns dict lake_id → np.ndarray of shape (n_days,).
     """
     n_days    = daily_grid.shape[0]
-    grid_flat = daily_grid.reshape(n_days, -1)   # (n_days, n_lat*n_lon)
+    grid_flat = daily_grid.reshape(n_days, -1)   # flatten spatial dims → (n_days, n_lat*n_lon)
 
     lake_values: dict[int, np.ndarray] = {}
     for lake_id, w in weights_dict.items():
-        idx  = w["flat_idx"]
-        wts  = w["weights"]
+        idx  = w["flat_idx"]   # 1-D array of flat grid indices for this lake's catchment cells
+        wts  = w["weights"]    # corresponding area weights (sum to 1 over catchment)
+
+        # Select only the catchment cells, replace NaN with 0 (e.g. ocean/missing pixels),
+        # then compute the weighted sum across cells for each day → shape (n_days,)
         vals = (np.nan_to_num(grid_flat[:, idx], nan=0.0) * wts[np.newaxis, :]).sum(axis=1)
         lake_values[lake_id] = vals
 

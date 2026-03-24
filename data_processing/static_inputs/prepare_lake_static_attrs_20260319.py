@@ -43,21 +43,21 @@ REACH_ATTRS_CSV = Path(
 LAKE_UPSTREAM_SEGS_CSV = Path(
     "E:/Project_2025_2026/Smart_hs/raw_data/grit"
     "/GRIT_mekong_mega_reservoirs/reservoirs"
-    "/gritv06_pld_lake_upstream_segments_0sqkm.csv"
+    "/gritv06_great_mekong_pld_lake_upstream_segments_0sqkm.csv"
 )
 
 # Reach table: fid = reach ID, segment_id = parent segment
 REACHES_WITH_LAKES_CSV = Path(
     "E:/Project_2025_2026/Smart_hs/raw_data/grit"
     "/GRIT_mekong_mega_reservoirs/reaches"
-    "/gritv06_reaches_mekong_basin_with_pld_lakes.csv"
+    "/gritv06_reaches_great_mekong_with_lake_id.csv"
 )
 
 # Output directory (will be created if absent)
 SAVE_DIR = Path(
     "E:/Project_2025_2026/Smart_hs/processed_data"
     "/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260319"
+    "/training_data_lake_based_great_mekong_20260324"
 )
 
 # ─── Load data ─────────────────────────────────────────────────────────────────
@@ -71,13 +71,13 @@ NUMERIC_FEATURE_COLS = reach_attrs.select_dtypes(include=[np.number]).columns.to
 STRING_FEATURE_COLS  = reach_attrs.select_dtypes(exclude=[np.number]).columns.tolist()
 
 print("Loading reaches table (segment_id → fid mapping) …")
-reaches = pd.read_csv(REACHES_WITH_LAKES_CSV, usecols=["fid", "segment_id"])
+reaches = pd.read_csv(REACHES_WITH_LAKES_CSV, usecols=["reach_id", "segment_id"])
 
 # Build segment_id → list[fid] lookup
 seg_to_fids: dict[int, list[int]] = (
-    reaches.groupby("segment_id")["fid"].apply(list).to_dict()
+    reaches.groupby("segment_id")["reach_id"].apply(list).to_dict()
 )
-print(f"  {len(seg_to_fids)} unique segment_ids mapped to {len(reaches)} fids")
+print(f"  {len(seg_to_fids)} unique segment_ids mapped to {len(reaches)} reach_id")
 
 print("Loading lake upstream-segment table …")
 lake_upstream = pd.read_csv(LAKE_UPSTREAM_SEGS_CSV)

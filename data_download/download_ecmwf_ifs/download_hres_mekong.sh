@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=hres_download          # Name of your job
-#SBATCH --output=hres_download.out        # Standard output file
-#SBATCH --error=hres_download.err         # Standard error file
+#SBATCH --output=hres_download_2026.out        # Standard output file
+#SBATCH --error=hres_download_2026.err         # Standard error file
 #SBATCH --nodes=1                         # Request one node
 #SBATCH --ntasks=1                        # Request one task
 #SBATCH --cpus-per-task=1                # Request 1 CPUs per task
@@ -11,7 +11,7 @@
 
 # Load any necessary modules
 module load Anaconda3
-source activate $DATA/py311
+conda activate $DATA/py311
 
 # Run the download script
 python download_hres_mekong.py
