@@ -11,6 +11,7 @@
 
 # Load any necessary modules
 module load Anaconda3
+source $(conda info --base)/etc/profile.d/conda.sh
 conda activate $DATA/py311
 
 # Run the download script
