@@ -286,7 +286,7 @@ def extract_lake_values(
     for lake_id, w in weights_dict.items():
         idx  = w["flat_idx"]
         wts  = w["weights"]
-        vals = (grid_flat[:, idx] * wts[np.newaxis, :]).sum(axis=1)
+        vals = (np.nan_to_num(grid_flat[:, idx], nan=0.0) * wts[np.newaxis, :]).sum(axis=1)
         lake_values[lake_id] = vals
 
     return lake_values
