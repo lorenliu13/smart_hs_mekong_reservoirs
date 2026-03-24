@@ -63,8 +63,8 @@ GRID = [0.1, 0.1]
 # All 24 hours for daily aggregation in post-processing
 HOURS = [f"{h:02d}:00" for h in range(24)]
 
-START_YEAR = 2023
-END_YEAR   = 2025
+START_YEAR = 2026
+END_YEAR   = 2026
 
 OUTDIR = Path("/data/ouce-grit/cenv1160/smart_hs/raw_data/era5_land")
 # OUTDIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\era5_land")

@@ -24,18 +24,19 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+TIME_RANGE = '2023_12_2026_02'
+
 # ── Paths ───────────────────────────────────────────────────────────────────────
 OUTLIER_CSV = Path(
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
-    r"\swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
-)
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
+) / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
 
 OUTPUT_DIR = Path(
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes_daily"
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes_daily"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_CSV = OUTPUT_DIR / "swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
+OUTPUT_CSV = OUTPUT_DIR / f"swot_lake_{TIME_RANGE}_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
 
 # =============================================================================
 # 1. Load outlier-flagged data

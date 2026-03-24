@@ -27,15 +27,15 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+TIME_RANGE = '2023_12_2026_02'
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 DATA_PATH = (
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot"
-    r"\mekong_river_basin\swot\lakes\full_swot_lake_df_2023_2025.csv"
+    rf"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes\full_swot_lake_df_{TIME_RANGE}.csv"
 )
 
 OUTPUT_DIR = (
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot"
-    r"\mekong_river_basin\swot\lakes"
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
 )
 
 # QC thresholds
@@ -211,7 +211,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 out_obs = os.path.join(
     OUTPUT_DIR,
-    "swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv",
+    f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv",
 )
 df.to_csv(out_obs, index=False)
 print(f"\nSaved observations  : {out_obs}")
@@ -219,7 +219,7 @@ print(f"  Rows  : {len(df):,}")
 
 out_summary = os.path.join(
     OUTPUT_DIR,
-    "swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_per_lake_summary.csv",
+    f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_per_lake_summary.csv",
 )
 per_lake.to_csv(out_summary, index=False)
 print(f"Saved lake summary  : {out_summary}")

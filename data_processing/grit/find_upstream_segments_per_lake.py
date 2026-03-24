@@ -65,7 +65,6 @@ Output:
     n_all_segments            - total count
 """
 
-import geopandas as gpd
 import pandas as pd
 from collections import defaultdict
 
@@ -78,29 +77,24 @@ LAKE_AREA_THRESHOLD_SQKM = 0   # Must match the lake graph that was produced
 # Paths
 # ---------------------------------------------------------------------------
 REACHES_CSV = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/reaches/"
-    "gritv06_reaches_mekong_basin_with_pld_lakes.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches"
+    r"\gritv06_reaches_great_mekong_with_lake_id.csv"
 )
 SEGMENTS_CSV = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/segments/"
-    "gritv06_segments_mekong.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\segments"
+    r"\gritv06_segments_great_mekong.csv"
 )
 LAKE_GRAPH_CSV = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/reservoirs/"
-    f"gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
-PLD_SHP = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/prior_lake_database/"
-    "swot_prior_lake_database_mekong_overlap_with_grit.shp"
+PLD_PATH = (
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database"
+    r"\swot_prior_lake_database_great_mekong_overlap_with_grit.csv"
 )
 OUTPUT_CSV = (
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit/"
-    "GRIT_mekong_mega_reservoirs/reservoirs/"
-    f"gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 
 # ---------------------------------------------------------------------------
@@ -108,14 +102,14 @@ OUTPUT_CSV = (
 # ---------------------------------------------------------------------------
 lake_graph = pd.read_csv(LAKE_GRAPH_CSV)
 valid_lake_ids: set[int] = set(
-    lake_graph.loc[lake_graph["lake_id"] != -1, "lake_id"].astype("int64")
+    lake_graph["lake_id"].astype("int64")
 )
 print(f"Valid lakes from graph: {len(valid_lake_ids)}")
 
 # ---------------------------------------------------------------------------
 # Load PLD shapefile to build lake centroid lon/lat lookup
 # ---------------------------------------------------------------------------
-pld = gpd.read_file(PLD_SHP)
+pld = pd.read_csv(PLD_PATH)
 pld["lake_id"] = pld["lake_id"].astype("int64")
 # Keep first occurrence per lake_id (lon/lat are the same for all sub-polygons)
 lake_lonlat: dict[int, tuple[float, float]] = (
@@ -129,7 +123,7 @@ print(f"Lon/lat loaded for {len(lake_lonlat)} lakes")
 # ---------------------------------------------------------------------------
 # 2. Build segment → lake mapping from reach data
 # ---------------------------------------------------------------------------
-reaches = pd.read_csv(REACHES_CSV, usecols=["fid", "segment_id", "lake_id"])
+reaches = pd.read_csv(REACHES_CSV, usecols=["reach_id", "segment_id", "lake_id"])
 
 lake_reaches = reaches[reaches["lake_id"].notna()].copy()
 lake_reaches["lake_id"] = lake_reaches["lake_id"].astype("int64")

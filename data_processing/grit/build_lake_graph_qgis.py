@@ -3,21 +3,21 @@ Build a QGIS-compatible GeoPackage from the lake-level connectivity graph.
 
 Reads
 -----
-1. gritv06_pld_lake_graph_{threshold}sqkm.csv
+1. gritv06_great_mekong_pld_lake_graph_{threshold}sqkm.csv
      lake_id, most_downstream_fid, downstream_river_fid,
      upstream_lake_ids, downstream_lake_ids
-     (lake_id = -1 is the terminal river node — most-downstream reach, basin outlet)
-2. swot_prior_lake_database_mekong_overlap_with_grit.shp
-     lake_id, lon, lat, names, poly_area, ref_area, geometry (polygon)
-3. gritv06_reaches_mekong_basin_with_pld_lakes.shp
-     fid, geometry (LineString) — used to place the terminal node on the map
+     (negative lake_ids are terminal river nodes — -1, -2, … one per basin outlet)
+2. swot_prior_lake_database_great_mekong_overlap_with_grit.csv
+     lake_id, lon, lat, names, poly_area, ref_area
+3. gritv06_reaches_great_mekong_with_lake_id.csv
+     reach_id — used to verify terminal reach IDs (no geometry; terminal nodes get null geometry)
 
 Output
 ------
-gritv06_pld_lake_graph_{threshold}sqkm.gpkg  (GeoPackage, EPSG:4326)
-  Layer: lake_nodes  – one point per lake (polygon centroid) + all graph attrs.
-                       Terminal node (lake_id = -1, name = "BASIN_OUTLET") uses
-                       the centroid of the terminal river reach geometry.
+gritv06_great_mekong_pld_lake_graph_{threshold}sqkm.gpkg  (GeoPackage, EPSG:4326)
+  Layer: lake_nodes  – one point per lake (lon/lat from PLD) + all graph attrs.
+                       Terminal nodes (lake_id < 0, name = "BASIN_OUTLET_-1" …) have
+                       null geometry (reaches CSV has no coordinates).
   Layer: lake_edges  – one directed line per edge (upstream → downstream lake),
                        including edges from lakes that drain to the terminal node.
                        attrs: from_lake_id, to_lake_id, from_name, to_name
@@ -30,29 +30,29 @@ from shapely.geometry import LineString, Point
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 5   # Must match the value used in build_lake_graph_from_reaches.py
-TERMINAL_NODE_ID = -1
+LAKE_AREA_THRESHOLD_SQKM = 0   # Must match the value used in build_lake_graph_from_reaches.py
+# Terminal node IDs are all negative integers (-1, -2, …); real lake IDs are positive.
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 GRAPH_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 PLD_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\prior_lake_database"
-    r"\swot_prior_lake_database_mekong_overlap_with_grit.shp"
+    r"\swot_prior_lake_database_great_mekong_overlap_with_grit.gpkg"
 )
 REACHES_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reaches"
-    r"\gritv06_reaches_mekong_basin_with_pld_lakes.shp"
+    r"\gritv06_reaches_great_mekong_with_lake_id.gpkg"
 )
 OUTPUT_GPKG = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.gpkg"
+    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.gpkg"
 )
 
 # ---------------------------------------------------------------------------
@@ -60,8 +60,8 @@ OUTPUT_GPKG = (
 # ---------------------------------------------------------------------------
 graph = pd.read_csv(GRAPH_CSV)
 
-# Normalise lake_id to int64 (may be stored as float in the CSV)
-graph["lake_id"] = graph["lake_id"].astype("int64")
+# Normalise lake_id to int64 (may be stored as float string in the CSV)
+graph["lake_id"] = pd.to_numeric(graph["lake_id"], errors="coerce").astype("int64")
 
 # Fill NaN connectivity cells with empty string so string ops are safe
 for col in ("upstream_lake_ids", "downstream_lake_ids", "downstream_river_fid"):
@@ -70,48 +70,44 @@ for col in ("upstream_lake_ids", "downstream_lake_ids", "downstream_river_fid"):
 print(f"Graph rows: {len(graph)}  (includes terminal node if present)")
 
 # ---------------------------------------------------------------------------
-# Resolve terminal reach fids from the terminal node row
+# Resolve terminal nodes: all graph rows with lake_id < 0.
+# Each has a single most_downstream_fid (one outlet reach per terminal node).
 # ---------------------------------------------------------------------------
-terminal_rows = graph[graph["lake_id"] == TERMINAL_NODE_ID]
-terminal_reach_fids: list[int] = []
-if not terminal_rows.empty:
-    for fid_str in str(terminal_rows.iloc[0]["most_downstream_fid"]).split(","):
-        fid_str = fid_str.strip()
-        if fid_str:
-            terminal_reach_fids.append(int(float(fid_str)))
+terminal_rows = graph[graph["lake_id"] < 0]
 
-print(f"Terminal node: lake_id={TERMINAL_NODE_ID}, reach fid(s): {terminal_reach_fids}")
+# node_id → outlet reach_id
+terminal_node_to_reach: dict[int, int] = {
+    int(row["lake_id"]): int(float(row["most_downstream_fid"]))
+    for _, row in terminal_rows.iterrows()
+    if str(row["most_downstream_fid"]).strip()
+}
+terminal_node_ids: set[int] = set(terminal_node_to_reach.keys())
+print(f"Terminal nodes: {sorted(terminal_node_ids)}  "
+      f"(outlet reach_ids: {terminal_node_to_reach})")
 
 # ---------------------------------------------------------------------------
-# Get terminal node geometry from GRIT reaches shapefile
-# The terminal reach is the most-downstream river reach with no downstream
-# neighbour — this is the river mouth / basin outlet.
-# We use the centroid of the reach line as the node location.
+# Verify terminal node reach IDs from GRIT reaches CSV.
+# The CSV has no geometry/coordinates; terminal nodes will have null geometry.
 # ---------------------------------------------------------------------------
-terminal_centroid: Point | None = None
+terminal_node_to_centroid: dict[int, Point] = {}
 
-if terminal_reach_fids:
-    print("Loading GRIT reaches shapefile to resolve terminal node geometry …")
-    reaches_gdf = gpd.read_file(REACHES_SHP)
-    reaches_gdf["fid"] = reaches_gdf["fid"].astype("int64")
-    terminal_reaches = reaches_gdf[reaches_gdf["fid"].isin(terminal_reach_fids)].copy()
+if terminal_node_to_reach:
+    print("Loading GRIT reaches CSV to verify terminal node reach IDs …")
+    reaches_df = pd.read_csv(REACHES_SHP)
+    reaches_df["reach_id"] = pd.to_numeric(reaches_df["reach_id"], errors="coerce").astype("int64")
 
-    if not terminal_reaches.empty:
-        # Compute centroid in projected CRS for accuracy, convert back to WGS84
-        merged_geom = terminal_reaches.to_crs(epsg=3857).geometry.union_all()
-        centroid_3857 = merged_geom.centroid
-        terminal_centroid = (
-            gpd.GeoSeries([centroid_3857], crs=3857).to_crs(4326).iloc[0]
-        )
-        print(f"Terminal node geometry resolved: lon={terminal_centroid.x:.4f}, lat={terminal_centroid.y:.4f}")
-    else:
-        print("WARNING: Terminal reach fid(s) not found in reaches shapefile — terminal node will have null geometry.")
+    for node_id, reach_id in terminal_node_to_reach.items():
+        match = reaches_df[reaches_df["reach_id"] == reach_id]
+        if match.empty:
+            print(f"  WARNING: reach_id={reach_id} not found for terminal node {node_id}.")
+        else:
+            print(f"  Terminal node {node_id}: reach_id={reach_id} found (no geometry in CSV — null geometry).")
 
 # ---------------------------------------------------------------------------
 # Load PLD shapefile (polygons)
 # ---------------------------------------------------------------------------
 pld = gpd.read_file(PLD_SHP)
-pld["lake_id"] = pld["lake_id"].astype("int64")
+pld["lake_id"] = pd.to_numeric(pld["lake_id"], errors="coerce").astype("int64")
 
 # Each physical lake may appear as multiple sub-polygons in PLD.
 # Dissolve them into a single multi-polygon per lake_id so we get one centroid.
@@ -131,7 +127,7 @@ print(f"PLD unique lake_ids after dissolve: {len(pld_dissolved)}")
 # Build nodes GeoDataFrame
 # ---------------------------------------------------------------------------
 # Merge graph data with dissolved PLD geometries.
-# The terminal node (lake_id = -1) has no PLD entry → centroid will be null
+# Terminal nodes (lake_id < 0) have no PLD entry → centroid will be null
 # until we inject the reach-derived geometry below.
 nodes_df = graph.merge(
     pld_dissolved[["lake_id", "names", "poly_area", "ref_area", "lon", "lat", "centroid"]],
@@ -139,8 +135,9 @@ nodes_df = graph.merge(
     how="left",
 )
 
-# Assign "BASIN_OUTLET" as the name for the terminal node
-nodes_df.loc[nodes_df["lake_id"] == TERMINAL_NODE_ID, "names"] = "BASIN_OUTLET"
+# Assign "BASIN_OUTLET_<id>" as the name for each terminal node
+for node_id in terminal_node_ids:
+    nodes_df.loc[nodes_df["lake_id"] == node_id, "names"] = f"BASIN_OUTLET_{node_id}"
 
 nodes_gdf = gpd.GeoDataFrame(
     nodes_df.drop(columns=["centroid"]),
@@ -148,12 +145,12 @@ nodes_gdf = gpd.GeoDataFrame(
     crs="EPSG:4326",
 )
 
-# Inject terminal node geometry and lon/lat derived from the reaches shapefile
-if terminal_centroid is not None:
-    mask = nodes_gdf["lake_id"] == TERMINAL_NODE_ID
-    nodes_gdf.loc[mask, "geometry"] = terminal_centroid
-    nodes_gdf.loc[mask, "lon"] = terminal_centroid.x
-    nodes_gdf.loc[mask, "lat"] = terminal_centroid.y
+# Inject geometry and lon/lat for each terminal node from its outlet reach
+for node_id, centroid_pt in terminal_node_to_centroid.items():
+    mask = nodes_gdf["lake_id"] == node_id
+    nodes_gdf.loc[mask, "geometry"] = centroid_pt
+    nodes_gdf.loc[mask, "lon"] = centroid_pt.x
+    nodes_gdf.loc[mask, "lat"] = centroid_pt.y
 
 missing_geom = nodes_gdf.geometry.isna().sum()
 if missing_geom:
@@ -181,9 +178,9 @@ for _, row in pld.iterrows():
         except (TypeError, ValueError):
             pass
 
-# Terminal node — use reach-derived geometry
-if terminal_centroid is not None:
-    centroid_lookup[TERMINAL_NODE_ID] = (terminal_centroid.x, terminal_centroid.y)
+# Terminal nodes — use reach-derived geometry
+for node_id, centroid_pt in terminal_node_to_centroid.items():
+    centroid_lookup[node_id] = (centroid_pt.x, centroid_pt.y)
 
 # ---------------------------------------------------------------------------
 # Build edges GeoDataFrame
@@ -191,7 +188,8 @@ if terminal_centroid is not None:
 # Expand comma-separated downstream_lake_ids into individual directed edges.
 # Edges to/from the terminal node now have geometry thanks to centroid_lookup.
 name_lookup = dict(zip(pld_dissolved["lake_id"], pld_dissolved["names"]))
-name_lookup[TERMINAL_NODE_ID] = "BASIN_OUTLET"
+for node_id in terminal_node_ids:
+    name_lookup[node_id] = f"BASIN_OUTLET_{node_id}"
 
 edge_records = []
 
@@ -228,10 +226,10 @@ edges_gdf["to_name"] = edges_gdf["to_lake_id"].map(name_lookup)
 
 print(f"Edges layer: {len(edges_gdf)} features")
 terminal_edges = edges_gdf[
-    (edges_gdf["from_lake_id"] == TERMINAL_NODE_ID) |
-    (edges_gdf["to_lake_id"] == TERMINAL_NODE_ID)
+    (edges_gdf["from_lake_id"] < 0) |
+    (edges_gdf["to_lake_id"] < 0)
 ]
-print(f"  Edges connected to terminal node: {len(terminal_edges)}")
+print(f"  Edges connected to terminal node(s): {len(terminal_edges)}")
 
 # ---------------------------------------------------------------------------
 # Write GeoPackage

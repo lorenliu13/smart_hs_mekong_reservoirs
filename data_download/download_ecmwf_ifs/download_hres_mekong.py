@@ -52,8 +52,8 @@ STEPS = (
     "/126/132/138/144/150/156/162/168/174/180/186/192/198/204/210/216/222/228/234/240"
 )
 
-START_YEAR = 2023
-END_YEAR   = 2025
+START_YEAR = 2026
+END_YEAR   = 2026
 
 OUTDIR = Path("/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres")
 # OUTDIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\ecmwf_ifs\hres")

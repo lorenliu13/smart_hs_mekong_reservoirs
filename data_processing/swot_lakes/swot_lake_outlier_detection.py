@@ -16,23 +16,24 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+TIME_RANGE = '2023_12_2026_02'
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SWOT_QC_PATH = Path(
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
-    r"\swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv"
-)
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
+) / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01.csv"
 # LAKE_GRAPH_PATH = Path(
 #     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
 #     r"\GRIT_mekong_mega_reservoirs\reservoirs"
 #     r"\gritv06_pld_lake_graph_0sqkm.csv"
 # )
 OUTPUT_DIR = Path(
-    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\mekong_river_basin\swot\lakes"
+    r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_CSV         = OUTPUT_DIR / "swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
-OUTPUT_SUMMARY_CSV = OUTPUT_DIR / "swot_lake_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag_summary.csv"
+OUTPUT_CSV         = OUTPUT_DIR / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
+OUTPUT_SUMMARY_CSV = OUTPUT_DIR / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag_summary.csv"
 
 # ── Detection thresholds ───────────────────────────────────────────────────────
 Z_THRESH        = 3.0   # |z| > Z_THRESH -> per-lake Z-score outlier

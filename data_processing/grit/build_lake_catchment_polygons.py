@@ -45,24 +45,20 @@ LAKE_AREA_THRESHOLD_SQKM = 0
 # Paths
 # ---------------------------------------------------------------------------
 CATCHMENT_SHP = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\catchments"
-    r"\GRITv06_catchments_mekong.shp"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\catchments"
+    r"\GRITv06_catchments_great_mekong.shp"
 )
 UPSTREAM_SEGS_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 LAKE_GRAPH_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 OUTPUT_SHP = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
+    rf"\gritv06_great_mekong_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
 )
 OUTPUT_GPKG = OUTPUT_SHP.replace(".shp", ".gpkg")
 
@@ -71,7 +67,7 @@ OUTPUT_GPKG = OUTPUT_SHP.replace(".shp", ".gpkg")
 # ---------------------------------------------------------------------------
 lake_graph = pd.read_csv(LAKE_GRAPH_CSV)
 # Exclude terminal node (-1)
-lake_graph = lake_graph[lake_graph["lake_id"] != -1].copy()
+# lake_graph = lake_graph[lake_graph["lake_id"] != -1].copy()
 lake_graph["lake_id"] = lake_graph["lake_id"].astype("int64")
 print(f"Lake graph rows (excl. terminal): {len(lake_graph)}")
 
