@@ -11,7 +11,7 @@
 
 # Load any necessary modules
 module load Anaconda3
-conda activate $DATA/py311
+source activate $DATA/py311
 
 # Run the download script
 python download_hres_mekong.py
