@@ -7,8 +7,8 @@ from dateutil.relativedelta import relativedelta
 base_dir = "/data/ouce-grit/cenv1160/smart_hs/raw_data/swot/mekong_river_basin/swot_lakes"
 file_list_dir = os.path.join(base_dir, "file_list")
 
-start_month = datetime(2023, 12, 1)
-end_month = datetime(2025, 12, 1)
+start_month = datetime(2025, 12, 1)
+end_month = datetime(2026, 2, 1)
 
 total_expected = 0
 total_downloaded = 0
@@ -16,7 +16,7 @@ total_missing = 0
 missing_files = []
 
 current_month = start_month
-while current_month < end_month:
+while current_month <= end_month:
     month_end = current_month + relativedelta(months=1)
     start_date = current_month.strftime('%Y-%m-%d')
     end_date = month_end.strftime('%Y-%m-%d')
