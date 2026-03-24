@@ -11,6 +11,9 @@
 
 # Load any necessary modules
 module load Anaconda3
+# conda info --base: prints the base conda installation path
+# /etc/profile.d/conda.sh — a shell script that ships with conda, which defines the conda shell function (including conda activate)
+# source — runs that script in the current shell (not a subprocess), so the conda function it defines becomes available in your session
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate $DATA/py311
 
