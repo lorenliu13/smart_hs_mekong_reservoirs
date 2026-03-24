@@ -86,7 +86,7 @@ START_MONTH = 1
 END_YEAR    = 2025
 END_MONTH   = 12
 N_DAYS      = 10     # number of forecast days to extract per init date
-OVERWRITE   = False  # set True to reprocess init dates that already have a CSV
+OVERWRITE   = True  # set True to reprocess init dates that already have a CSV
 N_WORKERS   = 20     # number of parallel worker processes (match --cpus-per-task in sbatch)
 
 # ---------------------------------------------------------------------------

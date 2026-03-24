@@ -83,7 +83,7 @@ LAKE_CENTROIDS_CSV = (
 )
 OUTPUT_DIR = Path(
     rf"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs"
-    rf"\era5_land\era5land_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    rf"\era5_land\era5land_daily_great_mekong_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
