@@ -33,7 +33,7 @@ LAKE_GRAPH_CSV = Path(
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260325"
+    "/training_data_lake_based_great_mekong_20260325"
 )
 
 START_DATE = "2023-10-01"
