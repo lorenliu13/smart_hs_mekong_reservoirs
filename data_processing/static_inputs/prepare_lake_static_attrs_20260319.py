@@ -33,10 +33,10 @@ from tqdm import tqdm
 # ─── Paths ─────────────────────────────────────────────────────────────────────
 
 # Reach-level predictor attributes  (reach_id == fid in the reaches table)
+# Use the static attributes combined by Mekong and Yangtzi
 REACH_ATTRS_CSV = Path(
-    "E:/Project_2025_2026/Smart_hs/raw_data/grit"
-    "/GRIT_vietnam/ba_river_watershed/reach_attrs"
-    "/GRITv06_reach_predictors_shared_MEKO.csv"
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\Grit_ARC\output_v06\attrs"
+    "/GRITv06_reach_predictors_shared_MEKO_YANG.csv"
 )
 
 # Lake → all upstream segment IDs (comma-separated)
@@ -57,7 +57,7 @@ REACHES_WITH_LAKES_CSV = Path(
 SAVE_DIR = Path(
     "E:/Project_2025_2026/Smart_hs/processed_data"
     "/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_great_mekong_20260324"
+    "/training_data_lake_based_great_mekong_20260325"
 )
 
 # ─── Load data ─────────────────────────────────────────────────────────────────

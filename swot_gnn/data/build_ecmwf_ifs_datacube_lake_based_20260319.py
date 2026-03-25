@@ -22,17 +22,15 @@ from tqdm import tqdm
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 ECMWF_BASE_DIR = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data"
-    "/mekong_river_basin_reservoirs/ecmwf_ifs_daily_catchment_level"
-    "/hres/ecmwf_ifs_daily_per_pld_lake_0sqkm"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily_catchment_level/hres/ecmwf_ifs_daily_great_mekong_per_pld_lake_0sqkm"
 )
 LAKE_GRAPH_CSV = Path(
     "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    "/gritv06_pld_lake_graph_0sqkm.csv"
+    "/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260319"
+    "/training_data_lake_based_great_mekong_20260325"
 )
 
 # Number of lead-days in the ECMWF IFS forecast per initialisation date.

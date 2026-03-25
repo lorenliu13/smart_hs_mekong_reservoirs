@@ -22,11 +22,11 @@ LAKE_GRAPH_CSV = Path(
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260319"
+    "/training_data_lake_based_great_mekong_20260325"
 )
 LAKE_STATIC_ATTRS_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260319/lake_graph_static_attrs_0sqkm.csv"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/training_data_lake_based_great_mekong_20260325"
+    "/lake_graph_static_attrs_0sqkm.csv"
 )
 
 # Columns to drop from the static attributes CSV before building the datacube

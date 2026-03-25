@@ -82,16 +82,16 @@ DATA_DIR = Path(r"E:\Project_2025_2026\Smart_hs\raw_data\ecmwf_ifs\hres_daily")
 CATCHMENT_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
+    rf"\gritv06_great_mekong_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
 )
 LAKE_CENTROIDS_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
 )
 OUTPUT_DIR = Path(
     rf"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs"
-    rf"\ecmwf_ifs\hres\ecmwf_ifs_daily_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    rf"\ecmwf_ifs\hres\ecmwf_ifs_daily_great_mekong_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 

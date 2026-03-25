@@ -24,16 +24,16 @@ from tqdm import tqdm
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 SWOT_LAKE_WSE_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/mekong_river_basin/swot/lakes_daily"
-    "/swot_lake_daily_wse_xtrk10_60km_dark50pct_qf01_lake_graph_0sqkm.csv"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_mekong_river_basin/lakes_daily"
+    "/swot_lake_2023_12_2026_02_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
 )
 LAKE_GRAPH_CSV = Path(
     "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    "/gritv06_pld_lake_graph_0sqkm.csv"
+    "/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_20260319"
+    "/training_data_lake_based_20260325"
 )
 
 START_DATE = "2023-10-01"
