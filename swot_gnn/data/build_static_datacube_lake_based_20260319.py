@@ -18,7 +18,7 @@ from pathlib import Path
 
 LAKE_GRAPH_CSV = Path(
     "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    "/gritv06_pld_lake_graph_0sqkm.csv"
+    "/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
