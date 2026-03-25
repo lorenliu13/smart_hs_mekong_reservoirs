@@ -5,7 +5,8 @@ Assign SWOT PLD lake_id to GRIT reaches that intersect lake polygons.
 import geopandas as gpd
 
 # --- Input paths ---
-PLD_SHP   = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database\swot_prior_lake_database_great_mekong.shp"
+PLD_SHP_1   = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database\swot_prior_lake_database_great_mekong_mekong.shp"
+PLD_SHP_2 = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database\swot_prior_lake_database_great_mekong_yang.shp"
 REACH_SHP = r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches\gritv06_reaches_great_mekong_basin.shp"
 
 # --- Output paths ---
@@ -20,8 +21,21 @@ PLD_LAKE_ID_COL = "lake_id"   # <-- adjust to actual column name in your PLD sha
 
 def main():
     print("Loading PLD polygons...")
-    pld = gpd.read_file(PLD_SHP)
-    print(f"  PLD CRS: {pld.crs}, features: {len(pld)}")
+    pld1 = gpd.read_file(PLD_SHP_1)
+    print(f"  PLD_1 CRS: {pld1.crs}, features: {len(pld1)}")
+    pld2 = gpd.read_file(PLD_SHP_2)
+    print(f"  PLD_2 CRS: {pld2.crs}, features: {len(pld2)}")
+
+    # Align pld2 CRS to pld1 before merging
+    if pld2.crs != pld1.crs:
+        print(f"  Reprojecting PLD_2 to PLD_1 CRS ({pld1.crs})...")
+        pld2 = pld2.to_crs(pld1.crs)
+
+    pld = gpd.GeoDataFrame(
+        gpd.pd.concat([pld1, pld2], ignore_index=True),
+        crs=pld1.crs,
+    ).drop_duplicates(subset=[PLD_LAKE_ID_COL])
+    print(f"  Merged PLD features: {len(pld)}")
     print(f"  PLD columns: {pld.columns.tolist()}")
 
     print("Loading GRIT reaches...")
