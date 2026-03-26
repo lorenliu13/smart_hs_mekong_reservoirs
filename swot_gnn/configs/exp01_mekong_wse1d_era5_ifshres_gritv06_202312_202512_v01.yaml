@@ -45,7 +45,7 @@ training:
   train_frac: 0.70
   val_frac: 0.15
   test_frac: 0.15
-  batch_size: 64
+  batch_size: 256
   lr: 0.001
   num_epochs: 100
   patience: 20             # early-stop if val loss does not improve for 20 epochs

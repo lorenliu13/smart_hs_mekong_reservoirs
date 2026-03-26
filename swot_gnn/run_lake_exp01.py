@@ -21,6 +21,7 @@ Usage:
 import argparse
 import csv
 import sys
+import time
 import yaml
 from pathlib import Path
 
@@ -148,11 +149,14 @@ def train(cfg, args):
     patience_counter = 0
     train_losses, val_losses = [], []
     stopped_early = False
+    training_start = time.time()
 
     for epoch in range(cfg["training"]["num_epochs"]):
+        epoch_start = time.time()
         avg_train = _run_epoch(model, train_loader, criterion, device,
                                optimizer=optimizer, grad_clip=grad_clip)
         avg_val   = _run_epoch(model, val_loader,   criterion, device)
+        epoch_secs = time.time() - epoch_start
 
         train_losses.append(avg_train)
         val_losses.append(avg_val)
@@ -161,7 +165,8 @@ def train(cfg, args):
         lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1:>3}/{cfg['training']['num_epochs']} | "
               f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
-              f"Best: ep{best_epoch+1} ({best_val_loss:.4f}) | LR: {lr:.2e}")
+              f"Best: ep{best_epoch+1} ({best_val_loss:.4f}) | LR: {lr:.2e} | "
+              f"Time: {epoch_secs:.1f}s")
 
         if avg_val < best_val_loss:
             best_val_loss    = avg_val
@@ -177,8 +182,14 @@ def train(cfg, args):
             stopped_early = True
             break
 
+    total_training_secs = time.time() - training_start
+    h, rem = divmod(int(total_training_secs), 3600)
+    m, s   = divmod(rem, 60)
+    print(f"\nTotal training time: {h:02d}:{m:02d}:{s:02d} "
+          f"({total_training_secs:.1f}s, {len(train_losses)} epochs)")
+
     # ── Re-save checkpoint enriched with training history ───────────────────
-    state_dict = torch.load(save_path, map_location="cpu")
+    state_dict = torch.load(save_path, map_location="cpu", weights_only=False)
     torch.save({
         "model_state_dict": state_dict,
         "train_losses":  train_losses,
@@ -226,10 +237,12 @@ def train(cfg, args):
         "model":    cfg["model"],
         "training": cfg["training"],
         "result": {
-            "best_epoch":    best_epoch + 1,    # 1-indexed
-            "best_val_loss": float(best_val_loss),
-            "total_epochs":  len(train_losses),
-            "stopped_early": stopped_early,
+            "best_epoch":          best_epoch + 1,    # 1-indexed
+            "best_val_loss":       float(best_val_loss),
+            "total_epochs":        len(train_losses),
+            "stopped_early":       stopped_early,
+            "training_time_secs":  round(total_training_secs, 1),
+            "training_time_hms":   f"{h:02d}:{m:02d}:{s:02d}",
         },
     }
     with open(run_dir / "run_config.yaml", "w") as f:
@@ -272,10 +285,24 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Compute device (default: cuda if available, else cpu)",
     )
+    parser.add_argument(
+        "--num-epochs", type=int, default=None,
+        help="Override num_epochs from config (e.g. --num-epochs 1 for a smoke test)",
+    )
+    parser.add_argument(
+        "--patience", type=int, default=None,
+        help="Override early-stop patience from config",
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+
+    # CLI overrides — useful for quick smoke tests without editing the YAML
+    if args.num_epochs is not None:
+        cfg["training"]["num_epochs"] = args.num_epochs
+    if args.patience is not None:
+        cfg["training"]["patience"] = args.patience
 
     assert cfg["training"]["forecast_horizon"] == 1, (
         "run_lake_exp01.py is designed for forecast_horizon=1. "
