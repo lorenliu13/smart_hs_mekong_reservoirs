@@ -7,6 +7,58 @@ Each training sample is indexed by an ECMWF init_date and contains:
   - Labels: WSE at init_date + days 0..9 (shape: n_lakes × 10)
   - Mask:   obs_mask at those forecast dates
 
+Data flow:
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │                         NetCDF Datacubes                             │
+    │                                                                      │
+    │  swot_lake_wse_datacube.nc          swot_lake_static_datacube.nc     │
+    │  (lake, time) → obs_mask,           (lake, static_feature)           │
+    │                 latest_wse, …                    │                   │
+    │         │                                        │                   │
+    │  swot_lake_era5_climate_datacube.nc              │                   │
+    │  (lake, time) → LWd, SWd, P, …                   │                   │
+    │         │                                        │                   │
+    │  swot_lake_ecmwf_forecast_datacube.nc            │                   │
+    │  (lake, init_time, lead_day) → LWd, SWd, P, …    │                   │
+    │         │                                        │                   │
+    └─────────┼────────────────────────────────────────┼───────────────────┘
+              │                                        │
+              ▼                                        │
+    assemble_lake_features_from_datacubes()            │
+      · intersects lake / date axes across all cubes   │
+      · stacks WSE (8) + ERA5 (13) → dynamic_features  │
+        shape: (n_lakes, n_dates, 21)                  │
+      · returns wse_target, obs_mask arrays            │
+              │                                        │
+              ▼                                        ▼
+    build_temporal_dataset_from_lake_datacubes()
+      · normalises features (log1p + z-score, train stats only)
+      · filters valid init_dates (full ERA5 history available)
+      · chronological split → train / val / test index arrays
+      · builds edge_index from lake graph CSV
+              │
+      ┌───────┼───────┐
+      ▼       ▼       ▼
+    train   val    test    ← TemporalGraphDatasetLake (share same arrays)
+              │
+              │  __getitem__(idx)  →  one sample per ECMWF init_date
+              │
+              ▼
+    ┌─────────────────────────────────────────────────────────────────┐
+    │  One training sample                                            │
+    │                                                                 │
+    │  t=0 ──────────────── t=29 │ t=30 ────────────────── t=39       │
+    │  ◄── ERA5 history (30d) ──► │ ◄── ECMWF forecast (10d) ──►      │
+    │  SWOT features (8) filled   │ SWOT features (6) zeroed out      │
+    │  ERA5 climate  (13) filled  │ DOY sin/cos (2) kept              │
+    │                             │ ECMWF climate  (13) filled        │
+    │                                                                 │
+    │  data_list : list[PyG Data] × 40  — one graph snapshot/step     │
+    │  static    : Tensor (n_lakes, n_static)                         │
+    │  labels    : Tensor (n_lakes, 10)  — WSE, NaN→0                 │
+    │  label_mask: Tensor (n_lakes, 10)  — 1 where SWOT observed      │
+    └─────────────────────────────────────────────────────────────────┘
+
 Usage:
     train_ds, val_ds, test_ds, norm_stats = build_temporal_dataset_from_lake_datacubes(
         era5_dynamic_datacube_path=...,

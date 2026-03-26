@@ -1,6 +1,15 @@
 """
-Build river network graph from GRIT reach data.
+Build river/lake network graphs from GRIT reach data.
 Converts to PyTorch Geometric Data format for SWOT-GNN.
+
+Supported graph sources
+-----------------------
+- build_graph_from_grit          : reach-level graph from raw GRIT CSV
+- build_graph_from_lake_graph    : lake-level graph from the output of
+                                   build_lake_graph_from_reaches.py
+                                   (one row per lake; upstream/downstream IDs
+                                   are comma-separated in upstream_lake_ids /
+                                   downstream_lake_ids columns)
 """
 import numpy as np
 import pandas as pd
@@ -97,108 +106,34 @@ def build_graph_from_grit(
     return edge_index, node_ids, node_to_idx, metadata
 
 
-def build_graph_from_segment_darea(
-    segment_darea_path: Union[str, Path],
-    segment_ids: Optional[np.ndarray] = None,
-    downstream_col: str = "downstre_1",
-    node_id_col: str = "fid",
-) -> Tuple[np.ndarray, np.ndarray, dict]:
-    """
-    Build directed graph from GRIT segment darea (shapefile or CSV with segment connectivity).
-
-    Args:
-        segment_darea_path: Path to segment darea CSV/shapefile with fid (segment_id), downstre_1
-        segment_ids: Optional subset of segment IDs. If None, use all.
-        downstream_col: Column with downstream segment IDs
-        node_id_col: Column for segment ID
-
-    Returns:
-        edge_index, node_ids, node_to_idx
-    """
-    # --- Load segment darea file ---
-    # Supports CSV or vector formats (.shp, .gpkg). Uses pyogrio if available,
-    # otherwise geopandas for shapefiles.
-    path = Path(segment_darea_path)
-    if path.suffix.lower() in (".shp", ".gpkg"):
-        try:
-            from pyogrio import read_dataframe
-            df = read_dataframe(path)
-        except ImportError:
-            import geopandas as gpd
-            df = gpd.read_file(path)
-    else:
-        df = pd.read_csv(path)
-
-    df = df.rename(columns={node_id_col: "fid"}) if node_id_col != "fid" else df
-    if segment_ids is not None:
-        df = df[df["fid"].isin(segment_ids)].copy()
-    df = df.reset_index(drop=True)
-
-    # --- Parse downstream segment IDs ---
-    # Same comma-separated format as GRIT reach downstream column
-    newcol = df[downstream_col].astype(str).str.split(",", expand=True)
-    col_names = [f"down{i+1}" for i in range(newcol.shape[1])]
-    df[col_names] = newcol
-    df[col_names] = df[col_names].replace("", np.nan).replace("nan", np.nan)
-
-    # --- Build node index (segments) ---
-    node_ids = np.sort(df["fid"].unique())
-    node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-    valid = set(node_ids)
-
-    # --- Extract edges from segment-level connectivity ---
-    # This file has direct segment-to-segment downstream links (fid = segment_id,
-    # downstre_1 = downstream segment IDs). No reach-level mapping needed.
-    edges = []
-    for _, row in df.iterrows():
-        src = row["fid"]
-        if src not in node_to_idx:
-            continue
-        src_idx = node_to_idx[src]
-        for col in col_names:
-            if col not in row.index:
-                continue
-            ds_val = row[col]
-            if pd.isna(ds_val):
-                continue
-            try:
-                ds_seg = int(float(ds_val))
-            except (ValueError, TypeError):
-                continue
-            if ds_seg in valid and ds_seg != src:
-                tgt_idx = node_to_idx[ds_seg]
-                edges.append((src_idx, tgt_idx))
-
-    # Add reverse edges for undirected GNN
-    if not edges:
-        edge_index = np.zeros((2, 0), dtype=np.int64)
-    else:
-        edge_index = np.array(edges, dtype=np.int64).T
-        rev = np.flip(edge_index, axis=0)
-        edge_index = np.concatenate([edge_index, rev], axis=1)
-        edge_index = np.unique(edge_index, axis=1)
-
-    return edge_index, node_ids, node_to_idx
-
-
 def build_graph_from_lake_graph(
     lake_graph_csv: Union[str, Path],
     lake_ids: Optional[np.ndarray] = None,
-    source_col: str = "lake_id",
-    downstream_col: str = "downstream_lake_id",
+    lake_id_col: str = "lake_id",
+    downstream_col: str = "downstream_lake_ids",
 ) -> Tuple[np.ndarray, np.ndarray, dict, dict]:
     """
-    Build directed lake connectivity graph from the GRIT PLD lake graph CSV.
+    Build directed lake connectivity graph from the output of
+    build_lake_graph_from_reaches.py.
 
-    The lake graph CSV has one row per directed edge (source_lake → downstream_lake).
-    Terminal nodes (-1) are excluded. Both reverse edges are added so the GNN
-    can propagate information in both directions.
+    Expected CSV columns (one row per lake):
+        lake_id              - unique lake ID
+        lon, lat             - centroid coordinates
+        most_downstream_fid  - fid of the most-downstream reach
+        downstream_river_fid - first non-lake reach(es) downstream
+        upstream_lake_ids    - comma-separated upstream lake IDs (empty if none)
+        downstream_lake_ids  - comma-separated downstream lake IDs (-1 = basin outlet)
+
+    Terminal nodes (lake_id == -1 or appearing as a downstream target with value -1)
+    are excluded. Both forward and reverse edges are added so the GNN can propagate
+    information in both directions.
 
     Args:
-        lake_graph_csv:   Path to gritv06_pld_lake_graph_0sqkm.csv
-        lake_ids:         Optional subset of lake IDs. If None, use all non-(-1) lakes.
-        source_col:       Column name for the source lake ID.
-        downstream_col:   Column name for the downstream lake ID.
+        lake_graph_csv:  Path to gritv06_*_pld_lake_graph_*.csv
+        lake_ids:        Optional subset of lake IDs to include. If None, use all.
+        lake_id_col:     Column name for the lake node ID (default: "lake_id").
+        downstream_col:  Column with comma-separated downstream lake IDs
+                         (default: "downstream_lake_ids").
 
     Returns:
         edge_index:   (2, num_edges) — directed + reversed edges, deduplicated
@@ -206,60 +141,55 @@ def build_graph_from_lake_graph(
         node_to_idx:  dict mapping lake_id → node index
         metadata:     dict with num_nodes, num_edges
     """
-    lake_graph = pd.read_csv(lake_graph_csv)
+    df = pd.read_csv(lake_graph_csv)
 
-    # Validate column names — give a helpful error listing available columns
-    available_cols = list(lake_graph.columns)
-    if source_col not in lake_graph.columns:
-        raise KeyError(
-            f"Source column '{source_col}' not found in lake graph CSV. "
-            f"Available columns: {available_cols}"
-        )
-    if downstream_col not in lake_graph.columns:
-        raise KeyError(
-            f"Downstream column '{downstream_col}' not found in lake graph CSV. "
-            f"Available columns: {available_cols}\n"
-            f"Hint: pass the correct column name via the downstream_col parameter."
-        )
+    # Validate required columns
+    for col in (lake_id_col, downstream_col):
+        if col not in df.columns:
+            raise KeyError(
+                f"Column '{col}' not found in lake graph CSV. "
+                f"Available columns: {list(df.columns)}"
+            )
 
-    # Parse both columns as int64, drop rows with NaN or terminal node -1
-    lake_graph[source_col]     = pd.to_numeric(lake_graph[source_col], errors="coerce")
-    lake_graph[downstream_col] = pd.to_numeric(lake_graph[downstream_col], errors="coerce")
-    lake_graph = lake_graph.dropna(subset=[source_col, downstream_col])
-    lake_graph[source_col]     = lake_graph[source_col].astype(np.int64)
-    lake_graph[downstream_col] = lake_graph[downstream_col].astype(np.int64)
+    # Parse lake_id, drop terminal node rows (-1)
+    df[lake_id_col] = pd.to_numeric(df[lake_id_col], errors="coerce")
+    df = df.dropna(subset=[lake_id_col]).copy()
+    df[lake_id_col] = df[lake_id_col].astype(np.int64)
+    df = df[df[lake_id_col] != -1].reset_index(drop=True)
 
-    # Remove rows involving the terminal node (-1)
-    lake_graph = lake_graph[
-        (lake_graph[source_col] != -1) & (lake_graph[downstream_col] != -1)
-    ]
-
-    # Determine node set
-    all_lake_ids = np.sort(
-        pd.concat([lake_graph[source_col], lake_graph[downstream_col]]).unique()
-    ).astype(np.int64)
-
+    # Apply optional lake_ids filter
     if lake_ids is not None:
         lake_id_set = set(lake_ids.tolist())
-        all_lake_ids = np.sort(np.array([lid for lid in all_lake_ids if lid in lake_id_set]))
+        df = df[df[lake_id_col].isin(lake_id_set)].reset_index(drop=True)
 
-    node_ids    = all_lake_ids
+    # Build node index from lake rows
+    node_ids = np.sort(df[lake_id_col].unique()).astype(np.int64)
     node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-    valid_set   = set(node_ids.tolist())
+    valid_set = set(node_ids.tolist())
 
-    # Extract edges — both endpoints must be in the node set
+    def _parse_ids(value) -> List[int]:
+        """Parse a comma-separated cell of lake IDs into a list of ints."""
+        if pd.isna(value) or str(value).strip() == "":
+            return []
+        return [int(x.strip()) for x in str(value).split(",") if x.strip()]
+
+    # Extract directed downstream edges from each lake row
     edges = []
-    for _, row in lake_graph.iterrows():
-        src = int(row[source_col])
-        tgt = int(row[downstream_col])
-        if src in valid_set and tgt in valid_set and src != tgt:
-            edges.append((node_to_idx[src], node_to_idx[tgt]))
+    for _, row in df.iterrows():
+        src = int(row[lake_id_col])
+        if src not in node_to_idx:
+            continue
+        src_idx = node_to_idx[src]
+        for tgt in _parse_ids(row[downstream_col]):
+            if tgt == -1 or tgt not in valid_set or tgt == src:
+                continue
+            edges.append((src_idx, node_to_idx[tgt]))
 
     # Build edge_index with reverse edges for undirected GNN
     if not edges:
         edge_index = np.zeros((2, 0), dtype=np.int64)
     else:
-        edge_index = np.array(edges, dtype=np.int64).T     # (2, num_directed_edges)
+        edge_index = np.array(edges, dtype=np.int64).T  # (2, num_directed_edges)
         rev = np.flip(edge_index, axis=0)
         edge_index = np.concatenate([edge_index, rev], axis=1)
         edge_index = np.unique(edge_index, axis=1)
