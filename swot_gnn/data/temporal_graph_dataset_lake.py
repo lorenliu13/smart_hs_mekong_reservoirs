@@ -326,7 +326,7 @@ class TemporalGraphDatasetLake(Dataset):
         #   [6] doy_sin             → computed from valid_date dayofyear
         #   [7] doy_cos             → computed from valid_date dayofyear
         #   [8–13]                  → ECMWF climate variables (9 vars, SWOT_DIM=5 offset)
-        ecmwf_slice = self.ecmwf_forecast[:, j, :, :]  # (n_lakes, forecast_horizon, CLIMATE_DIM)
+        ecmwf_slice = self.ecmwf_forecast[:, j, :self.forecast_horizon, :]  # (n_lakes, forecast_horizon, CLIMATE_DIM)
 
         fc_block = np.zeros(
             (self.n_lakes, self.forecast_horizon, SWOT_DIM + CLIMATE_DIM), dtype=np.float32
