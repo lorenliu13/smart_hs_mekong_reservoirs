@@ -8,8 +8,22 @@ Run      : 00 UTC only
 Steps    : 0-240h (6-hourly) — 41 steps; instantaneous vars averaged to daily, accumulated vars differenced
 Region   : Mekong River Basin (N=34, W=96, S=9, E=109)
 Grid     : 0.1° × 0.1° (~11 km, closest to HRES native 9 km)
-Format   : GRIB2 (native MARS format), one file per variable per month
-           Output structure: OUTDIR/YYYY-MM/hres_mekong_YYYY-MM_<var>.grib2
+Format   : GRIB2 (native MARS format), one combined file per month (all variables)
+           Output structure: OUTDIR/YYYY-MM/hres_mekong_YYYY-MM_all.grib2
+
+Efficiency note
+---------------
+For HRES sfc/fc data all parameters, steps, and levels for a given date+time
+are stored on the SAME MARS tape file.  Iterating over parameters in separate
+requests forces MARS to mount the same tapes repeatedly.  This script therefore
+issues ONE request per month with all param codes joined by "/", reducing tape
+mounts from 14× to 1× per month.  See ECMWF MARS efficiency guidelines:
+https://confluence.ecmwf.int/x/a4AJBQ
+
+To open in Python (filter by variable):
+    import xarray as xr
+    ds = xr.open_dataset("hres_mekong_2023-01_all.grib2", engine="cfgrib",
+                         filter_by_keys={"shortName": "tp"})
 """
 
 import argparse
@@ -43,6 +57,10 @@ VARIABLES = {
 
 AREA   = "34/89/7/112"                    # N/W/S/E — full Mekong River Basin
 GRID   = "0.1/0.1"                        # ~11 km regular lat/lon
+
+# All param codes joined for a single multi-param MARS request (MARS efficiency:
+# param is an inner-loop keyword — all params for a date+time share one tape file)
+ALL_PARAMS = "/".join(VARIABLES.values())
 
 # 6-hourly steps 0–240h (days 0–10), 41 steps total
 # Instantaneous vars (2t, 2d, sp, 10u, 10v): average 4 steps per day → daily mean
@@ -82,83 +100,60 @@ def build_date_str(year: int, month: int) -> str:
 # Download
 # ---------------------------------------------------------------------------
 
-def download_variable(
-    server: ECMWFService,
-    year: int,
-    month: int,
-    var_name: str,
-    param_code: str,
-    month_dir: Path,
-    date_str: str,
-    steps: str,
-) -> None:
-    """
-    Download one variable for one month of ECMWF IFS HRES forecast data.
+def download_month(server: ECMWFService, year: int, month: int, outdir: Path) -> bool:
+    """Download all variables for one month in a single MARS request.
 
-    Output
-    ------
-    File saved to: OUTDIR/YYYY-MM/hres_mekong_YYYY-MM_<var>.grib2
+    Returns True on success, False on failure.
 
-    GRIB2 is the native MARS format. To open in Python:
-        import xarray as xr
-        ds = xr.open_dataset("hres_mekong_2023-01_tp.grib2", engine="cfgrib")
+    A single request with all param codes retrieves everything from the same
+    tape file in one pass (MARS efficiency: param is an inner-loop keyword).
+    Output: OUTDIR/YYYY-MM/hres_mekong_YYYY-MM_all.grib2
 
     Notes on accumulated fields
     ---------------------------
     tp, ssrd, strd are accumulated from step=0 of each model run.
-    To obtain per-interval rates (e.g. 3-hourly precipitation), difference
+    To obtain per-interval values (e.g. 6-hourly precipitation), difference
     consecutive steps:
         tp_rate = ds["tp"].diff(dim="step")
     """
-    outfile = month_dir / f"hres_mekong_{year}-{month:02d}_{var_name}.grib2"
-
-    if outfile.exists():
-        print(f"[SKIP]  {outfile.name} already exists.")
-        return
-
-    print(f"[START] {year}-{month:02d}  {var_name} ({param_code})")
-
-    server.execute({
-        "class"   : "od",       # operational data
-        "expver"  : "1",
-        "stream"  : "oper",     # deterministic HRES
-        "type"    : "fc",       # forecast
-        "date"    : date_str,
-        "time"    : "00",       # 00 UTC run only
-        "step"    : steps,
-        "levtype" : "sfc",      # surface fields
-        "param"   : param_code,
-        "area"    : AREA,
-        "grid"    : GRID,
-    }, str(outfile))
-
-    print(f"[DONE]  Saved → {outfile}")
-
-
-def download_month(server: ECMWFService, year: int, month: int, outdir: Path) -> list[str]:
-    """Download all variables for one month, each into its own file.
-    Returns a list of variable names that failed."""
     if is_future_month(year, month):
         print(f"[SKIP]  {year}-{month:02d} is in the future.")
-        return []
+        return True
 
     month_dir = outdir / f"{year}-{month:02d}"
     month_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[INFO]  Output dir: {month_dir}")
+
+    outfile = month_dir / f"hres_mekong_{year}-{month:02d}_all.grib2"
+    if outfile.exists():
+        print(f"[SKIP]  {outfile.name} already exists.")
+        return True
 
     date_str = build_date_str(year, month)
-    print(f"[INFO]  Date range: {date_str}")
-    print(f"[INFO]  Downloading {len(VARIABLES)} variable(s)...")
+    print(f"[INFO]  Output dir  : {month_dir}")
+    print(f"[INFO]  Date range  : {date_str}")
+    print(f"[INFO]  Params      : {len(VARIABLES)} variables in one request")
+    print(f"[START] {year}-{month:02d}  all variables")
 
-    failed = []
-    for i, (var_name, param_code) in enumerate(VARIABLES.items(), 1):
-        print(f"[VAR]   ({i}/{len(VARIABLES)}) {var_name}")
-        try:
-            download_variable(server, year, month, var_name, param_code, month_dir, date_str, STEPS)
-        except Exception as e:
-            print(f"[FAIL]  {year}-{month:02d}  {var_name}: {e}")
-            failed.append(f"{year}-{month:02d}/{var_name}")
-    return failed
+    try:
+        server.execute({
+            "class"   : "od",       # operational data
+            "expver"  : "1",
+            "stream"  : "oper",     # deterministic HRES
+            "type"    : "fc",       # forecast
+            "date"    : date_str,
+            "time"    : "00",       # 00 UTC run only
+            "step"    : STEPS,
+            "levtype" : "sfc",      # surface fields
+            "param"   : ALL_PARAMS, # all variables in one request (MARS efficiency)
+            "area"    : AREA,
+            "grid"    : GRID,
+        }, str(outfile))
+    except Exception as e:
+        print(f"[FAIL]  {year}-{month:02d}: {e}")
+        return False
+
+    print(f"[DONE]  Saved → {outfile}")
+    return True
 
 
 def main() -> None:
@@ -176,7 +171,7 @@ def main() -> None:
 
     print(f"[INFO]  Output directory : {outdir}")
     print(f"[INFO]  Period           : {args.start_year}-{args.start_month:02d} → {args.end_year}-{args.end_month:02d}")
-    print(f"[INFO]  Variables        : {', '.join(VARIABLES.keys())}")
+    print(f"[INFO]  Variables        : {', '.join(VARIABLES.keys())} (1 combined request/month)")
     print(f"[INFO]  Region (N/W/S/E) : {AREA}")
     print(f"[INFO]  Grid             : {GRID}")
     print(f"[INFO]  Steps            : {STEPS[:40]}...")
@@ -196,28 +191,28 @@ def main() -> None:
     )
 
     months_requested = 0
-    all_failed = []
+    failed_months = []
     for year in range(args.start_year, args.end_year + 1):
         m_start = args.start_month if year == args.start_year else 1
         m_end   = args.end_month   if year == args.end_year   else 12
         for month in range(m_start, m_end + 1):
             months_requested += 1
             print(f"\n[MONTH] {year}-{month:02d}  ({months_requested}/{total_months})")
-            failed = download_month(server, year, month, outdir)
-            all_failed.extend(failed)
-            if failed:
-                print(f"[WARN]  {len(failed)} variable(s) failed for {year}-{month:02d}: {', '.join(v.split('/')[1] for v in failed)}")
+            ok = download_month(server, year, month, outdir)
+            if not ok:
+                failed_months.append(f"{year}-{month:02d}")
+                print(f"[WARN]  {year}-{month:02d} failed.")
             else:
-                print(f"[OK]    {year}-{month:02d} complete — all variables downloaded.")
+                print(f"[OK]    {year}-{month:02d} complete.")
 
     print("\n" + "=" * 60)
     print(f"[DONE]  {months_requested} month(s) processed → {outdir}")
-    if all_failed:
-        print(f"[WARN]  Failed ({len(all_failed)}):")
-        for f in all_failed:
+    if failed_months:
+        print(f"[WARN]  Failed ({len(failed_months)}):")
+        for f in failed_months:
             print(f"  {f}")
     else:
-        print("[OK]    All variables downloaded successfully.")
+        print("[OK]    All months downloaded successfully.")
 
 
 if __name__ == "__main__":
