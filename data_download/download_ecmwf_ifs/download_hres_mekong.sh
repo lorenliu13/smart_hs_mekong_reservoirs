@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1                        # Request one task
 #SBATCH --cpus-per-task=1                # Request 1 CPUs per task
 #SBATCH --mem-per-cpu=4G                  # Request 4GB memory per CPU
-#SBATCH --time=24:00:00                   # Job run time (4 hours)
+#SBATCH --time=72:00:00                   # Job run time (72 hours)
 #SBATCH --partition=long                 # Specify the partition/queue
 
 # Load any necessary modules
