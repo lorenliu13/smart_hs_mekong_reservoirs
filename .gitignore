@@ -33,6 +33,7 @@ env/
 *.shx
 *.prj
 *.geojson
+*.list
 
 # OS
 .DS_Store
