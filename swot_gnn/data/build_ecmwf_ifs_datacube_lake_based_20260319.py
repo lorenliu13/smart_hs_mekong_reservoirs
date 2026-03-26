@@ -33,6 +33,10 @@ SAVE_DIR = Path(
     "/training_data_lake_based_great_mekong_20260325"
 )
 
+# Date range limits for the datacube (init_dates outside this window are excluded).
+START_DATE = "2023-10-01"
+END_DATE   = "2025-12-31"
+
 # Number of lead-days in the ECMWF IFS forecast per initialisation date.
 FORECAST_HORIZON = 10
 
@@ -244,6 +248,11 @@ if __name__ == "__main__":
     all_init_dates = _determine_ecmwf_init_dates(ECMWF_BASE_DIR, probe_var=ERA5_RAW_VARS[0])
     print(f"  Found {len(all_init_dates)} ECMWF init_dates "
           f"({all_init_dates[0].date()} … {all_init_dates[-1].date()})")
+
+    all_init_dates = all_init_dates[
+        (all_init_dates >= START_DATE) & (all_init_dates <= END_DATE)
+    ]
+    print(f"  After date filter [{START_DATE} … {END_DATE}]: {len(all_init_dates)} init_dates")
 
     build_ecmwf_forecast_datacube(
         ecmwf_base_dir=ECMWF_BASE_DIR,
