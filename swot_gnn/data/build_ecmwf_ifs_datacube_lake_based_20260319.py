@@ -51,18 +51,9 @@ ERA5_RAW_VARS = [
 
 
 def load_lake_ids_from_graph(lake_graph_csv: Path) -> np.ndarray:
-    """
-    Extract unique lake IDs from the GRIT PLD lake graph CSV.
-    Excludes the terminal node (-1).
-
-    Returns:
-        Sorted int64 array of lake IDs.
-    """
-    lake_graph = pd.read_csv(lake_graph_csv)
-    ids = lake_graph['lake_id'].to_numpy(dtype=np.int64)
-    ids = np.unique(ids)
-    ids = ids[ids != -1]
-    return ids
+    """Return sorted unique int64 lake IDs from the GRIT PLD lake graph CSV, excluding -1."""
+    ids = pd.read_csv(lake_graph_csv)["lake_id"].to_numpy(dtype=np.int64)
+    return np.unique(ids[ids != -1])
 
 
 def derive_climate_vars(raw: dict) -> dict:
@@ -95,30 +86,11 @@ def derive_climate_vars(raw: dict) -> dict:
 
 
 def _determine_ecmwf_init_dates(ecmwf_base_dir: Path, probe_var: str = "tp") -> pd.DatetimeIndex:
-    """
-    Scan the ECMWF per-lake directory for one variable to determine available init_dates.
-
-    Files are named: ecmwf_per_lake_{var}_YYYY-MM.csv  (one file per month, all
-    init_dates for that month combined in the init_date column).
-    """
+    """Return sorted unique init_dates found across all monthly CSV files for probe_var."""
     var_dir = ecmwf_base_dir / probe_var
-    if not var_dir.exists():
-        raise FileNotFoundError(f"ECMWF variable directory not found: {var_dir}")
-
-    dates: set = set()
     monthly_files = sorted(var_dir.glob(f"ecmwf_per_lake_{probe_var}_????-??.csv"))
-    for fpath in monthly_files:
-        try:
-            df = pd.read_csv(fpath, usecols=["init_date"])
-            parsed = pd.to_datetime(df["init_date"], errors="coerce").dropna()
-            for d in parsed:
-                dates.add(d.normalize())
-        except Exception:
-            pass
-
-    if not dates:
-        raise ValueError(f"No ECMWF init_date files found in {var_dir}")
-
+    df = pd.concat([pd.read_csv(f, usecols=["init_date"]) for f in monthly_files])
+    dates = pd.to_datetime(df["init_date"], errors="coerce").dt.normalize().dropna().unique()
     return pd.DatetimeIndex(sorted(dates))
 
 
@@ -136,54 +108,36 @@ def load_ecmwf_climate_arrays(
     CSV format: lake_id, init_date, forecast_day, valid_date, {var_name}, extraction_method
     Files:      ecmwf_base_dir/{var}/ecmwf_per_lake_{var}_YYYY-MM.csv
     """
-    n_lakes     = len(lake_ids)
-    n_init      = len(all_init_dates)
-    lake_to_idx = {lid: i for i, lid in enumerate(lake_ids)}
-    init_to_idx = {d: i for i, d in enumerate(all_init_dates)}
-    year_months = sorted({(d.year, d.month) for d in all_init_dates})
+    year_months   = sorted({(d.year, d.month) for d in all_init_dates})
+    target_cols   = pd.MultiIndex.from_product(
+        [all_init_dates, range(1, forecast_horizon + 1)],
+        names=["init_date", "forecast_day"],
+    )
 
     raw_dict = {}
-    for var in raw_vars:
-        print(f"  Loading ECMWF variable: {var} …")
-        raw_cube = np.zeros((n_lakes, n_init, forecast_horizon), dtype=np.float32)
-        n_missing = 0
+    for var in tqdm(raw_vars, desc="Loading ECMWF variables"):
+        fpaths = [
+            ecmwf_base_dir / var / f"ecmwf_per_lake_{var}_{year}-{month:02d}.csv"
+            for year, month in year_months
+        ]
+        df = pd.concat(
+            [pd.read_csv(f, usecols=["lake_id", "init_date", "forecast_day", var]) for f in fpaths if f.exists()],
+            ignore_index=True,
+        )
+        df["init_date"] = pd.to_datetime(df["init_date"], errors="coerce").dt.normalize()
+        df["lake_id"]   = pd.to_numeric(df["lake_id"], errors="coerce")
+        df = df.dropna(subset=["init_date", "lake_id"])
+        df["lake_id"]   = df["lake_id"].astype(np.int64)
 
-        for (year, month) in tqdm(year_months, desc=f"    {var}", leave=False):
-            fpath = ecmwf_base_dir / var / f"ecmwf_per_lake_{var}_{year}-{month:02d}.csv"
-            if not fpath.exists():
-                n_missing += 1
-                continue
-
-            df = pd.read_csv(fpath)
-            df["lake_id"]   = pd.to_numeric(df["lake_id"],   errors="coerce").dropna().astype(np.int64)
-            df["init_date"] = pd.to_datetime(df["init_date"], errors="coerce")
-            df = df.dropna(subset=["init_date"])
-            df["init_date"] = df["init_date"].dt.normalize()
-            df = df[df["lake_id"].isin(lake_to_idx)]
-            if df.empty:
-                continue
-
-            for init_date, grp in df.groupby("init_date"):
-                init_date = pd.Timestamp(init_date)
-                if init_date not in init_to_idx:
-                    continue
-
-                t_idx = init_to_idx[init_date]
-                pivot = (
-                    grp.pivot_table(index="lake_id", columns="forecast_day", values=var, aggfunc="first")
-                    .reindex(index=lake_ids)
-                )
-                for fd in range(1, forecast_horizon + 1):
-                    if fd in pivot.columns:
-                        col_vals = pivot[fd].to_numpy(dtype=np.float32)
-                        col_vals = np.nan_to_num(col_vals, nan=0.0)
-                        raw_cube[:, t_idx, fd - 1] = col_vals
-
-        if n_missing > 0:
-            pct = 100.0 * n_missing / max(len(year_months), 1)
-            print(f"    [WARN] {var}: {n_missing}/{len(year_months)} monthly files missing ({pct:.1f}%)")
-
-        raw_dict[var] = raw_cube
+        # Pivot to (n_lakes, n_init_dates * forecast_horizon), reindex to exact target shape,
+        # fill missing with 0, then reshape to (n_lakes, n_init_dates, forecast_horizon).
+        pivot = (
+            df.pivot_table(index="lake_id", columns=["init_date", "forecast_day"], values=var, aggfunc="first")
+            .reindex(index=lake_ids, columns=target_cols)
+            .to_numpy(dtype=np.float32)
+        )
+        np.nan_to_num(pivot, nan=0.0, copy=False)
+        raw_dict[var] = pivot.reshape(len(lake_ids), len(all_init_dates), forecast_horizon)
 
     return derive_climate_vars(raw_dict)
 
