@@ -420,9 +420,7 @@ def build_temporal_dataset_from_lake_datacubes(
     train_frac: float = 0.7,
     val_frac: float = 0.15,
     test_frac: float = 0.15,
-    require_obs_on_any_forecast_day: bool = True,
-    lake_graph_source_col: str = "lake_id",
-    lake_graph_downstream_col: str = "downstream_lake_id",
+    require_obs_on_any_forecast_day: bool = True
 ) -> Tuple[
     TemporalGraphDatasetLake,
     TemporalGraphDatasetLake,
@@ -456,8 +454,6 @@ def build_temporal_dataset_from_lake_datacubes(
         train_frac, val_frac, test_frac: Chronological split fractions
         require_obs_on_any_forecast_day: Only keep init_dates where at least one
                                          of the 10 forecast days has a SWOT observation.
-        lake_graph_source_col:        Source lake_id column in lake graph CSV
-        lake_graph_downstream_col:    Downstream lake_id column in lake graph CSV
 
     Returns:
         (train_ds, val_ds, test_ds, norm_stats)
@@ -485,9 +481,7 @@ def build_temporal_dataset_from_lake_datacubes(
     # ── Build lake graph ──────────────────────────────────────────────────────
     edge_index, _, _, _ = build_graph_from_lake_graph(
         lake_graph_csv=lake_graph_path,
-        lake_ids=lake_ids_out,
-        source_col=lake_graph_source_col,
-        downstream_col=lake_graph_downstream_col,
+        lake_ids=lake_ids_out
     )
 
     # ── Find valid init_date positions and split ───────────────────────────────
