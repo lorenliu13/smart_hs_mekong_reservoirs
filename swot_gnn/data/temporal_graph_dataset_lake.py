@@ -18,6 +18,7 @@ Usage:
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from pathlib import Path
 from typing import Optional, Union, Tuple, List, Dict
 
@@ -30,14 +31,124 @@ try:
 except ImportError:
     HAS_PYG = False
 
-from .feature_assembler_lake import (
-    assemble_lake_features_from_datacubes,
-    ERA5_INPUT_VARS,
-    ECMWF_CLIMATE_VARS,
-    SWOT_DIM,
-    CLIMATE_DIM,
-)
 from .graph_builder import build_graph_from_lake_graph
+
+# ─── Feature ordering ──────────────────────────────────────────────────────────
+
+# 8 SWOT-derived input features loaded from the WSE datacube (indices 0–7).
+WSE_INPUT_VARS: List[str] = [
+    "obs_mask",            # 0:  1 where SWOT observed, 0 otherwise
+    "latest_wse",          # 1:  forward-filled normalised WSE
+    "latest_wse_u",        # 2:  forward-filled WSE uncertainty
+    "latest_wse_std",      # 3:  forward-filled within-pass WSE std
+    "latest_area_total",   # 4:  forward-filled total water area
+    "days_since_last_obs", # 5:  days since last SWOT pass
+    "time_doy_sin",        # 6:  sin(2π × doy / 365.25)
+    "time_doy_cos",        # 7:  cos(2π × doy / 365.25)
+]
+
+# 13 ERA5-Land climate features (indices 8–20). Order matches ECMWF_CLIMATE_VARS
+# so ERA5 reanalysis and ECMWF forecast tensors can be concatenated directly.
+ERA5_CLIMATE_VARS: List[str] = [
+    "LWd", "SWd", "P", "Pres", "Temp", "Td", "Wind",
+    "sf", "sd", "swvl1", "swvl2", "swvl3", "swvl4",
+]
+
+ERA5_INPUT_VARS:    List[str] = WSE_INPUT_VARS + ERA5_CLIMATE_VARS
+ECMWF_CLIMATE_VARS: List[str] = ERA5_CLIMATE_VARS
+
+SWOT_DIM:    int = 8   # indices 0–7
+CLIMATE_DIM: int = 13  # indices 8–20
+
+# Feature indices zeroed in forecast mode (future timesteps have no SWOT data).
+# Indices 6–7 (doy_sin/cos) are kept because the calendar date is still known.
+WSE_LAKE_DYNAMIC_INDICES: List[int] = [0, 1, 2, 3, 4, 5]
+
+# ───────────────────────────────────────────────────────────────────────────────
+
+
+def _stack_vars(ds: xr.Dataset, var_names: List[str], **sel) -> np.ndarray:
+    """Stack named variables from a dataset into a float32 array with NaN→0."""
+    arrays = np.stack([ds[v].sel(**sel).values for v in var_names], axis=-1)
+    return np.nan_to_num(arrays.astype(np.float32), nan=0.0)
+
+
+def assemble_lake_features_from_datacubes(
+    wse_datacube_path: Union[str, Path],
+    era5_climate_datacube_path: Union[str, Path],
+    ecmwf_forecast_datacube_path: Union[str, Path],
+    static_datacube_path: Union[str, Path],
+    lake_ids: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+           np.ndarray, pd.DatetimeIndex, pd.DatetimeIndex]:
+    """Load lake features from four NetCDF datacubes into numpy arrays.
+
+    Returns:
+        dynamic_features:     (n_lakes, n_dates, 21) — WSE (8) + ERA5 climate (13)
+        ecmwf_forecast:       (n_lakes, n_init_dates, n_forecast_days, 13)
+        static_features:      (n_lakes, n_static)
+        wse_target:           (n_lakes, n_dates)  — NaN where not observed
+        obs_mask:             (n_lakes, n_dates)  — 1 where SWOT observed
+        lake_ids_out:         (n_lakes,)
+        dates_out:            DatetimeIndex
+        ecmwf_init_dates_out: DatetimeIndex
+    """
+    ds_wse    = xr.open_dataset(wse_datacube_path)
+    ds_era5   = xr.open_dataset(era5_climate_datacube_path)
+    ds_ecmwf  = xr.open_dataset(ecmwf_forecast_datacube_path)
+    ds_static = xr.open_dataset(static_datacube_path)
+
+    try:
+        # Lake IDs: intersection of all four cubes, then subset if requested
+        all_cube_lakes = np.intersect1d(
+            np.intersect1d(ds_wse.lake.values, ds_era5.lake.values),
+            np.intersect1d(ds_ecmwf.lake.values, ds_static.lake.values),
+        ).astype(np.int64)
+        if lake_ids is None:
+            lake_ids = all_cube_lakes
+        else:
+            lake_ids = np.array(
+                [lid for lid in lake_ids if lid in all_cube_lakes], dtype=np.int64
+            )
+        if len(lake_ids) == 0:
+            raise ValueError("No lakes in common across all four datacubes.")
+
+        # Dates: intersection of WSE and ERA5 time axes
+        dates = pd.DatetimeIndex(ds_wse.time.values).intersection(
+            pd.DatetimeIndex(ds_era5.time.values)
+        )
+        if len(dates) == 0:
+            raise ValueError("No overlapping dates across WSE and ERA5 datacubes.")
+
+        ecmwf_init_dates = pd.DatetimeIndex(ds_ecmwf.init_time.values)
+
+        # Dynamic features: WSE block (8) + ERA5 block (13) → (n_lakes, n_dates, 21)
+        wse_feat  = _stack_vars(ds_wse,  WSE_INPUT_VARS,    lake=lake_ids, time=dates)
+        era5_feat = _stack_vars(ds_era5, ERA5_CLIMATE_VARS, lake=lake_ids, time=dates)
+        dynamic_features = np.concatenate([wse_feat, era5_feat], axis=-1)
+
+        wse_target = ds_wse["wse"].sel(lake=lake_ids, time=dates).values.astype(np.float32)
+        obs_mask   = ds_wse["obs_mask"].sel(lake=lake_ids, time=dates).values.astype(np.float32)
+
+        # ECMWF forecast → (n_lakes, n_init_dates, n_forecast_days, 13)
+        ecmwf_forecast = _stack_vars(
+            ds_ecmwf, ECMWF_CLIMATE_VARS, lake=lake_ids, init_time=ecmwf_init_dates
+        )
+
+        static_arr = np.nan_to_num(
+            ds_static["static_feature"].sel(lake=lake_ids).values.astype(np.float32), nan=0.0
+        )
+
+        return (
+            dynamic_features, ecmwf_forecast, static_arr,
+            wse_target, obs_mask, lake_ids, dates, ecmwf_init_dates,
+        )
+
+    finally:
+        ds_wse.close()
+        ds_era5.close()
+        ds_ecmwf.close()
+        ds_static.close()
 
 
 class TemporalGraphDatasetLake(Dataset):

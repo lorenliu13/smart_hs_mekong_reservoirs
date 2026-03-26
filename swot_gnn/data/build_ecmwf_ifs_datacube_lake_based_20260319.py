@@ -52,7 +52,7 @@ ERA5_RAW_VARS = [
 
 def load_lake_ids_from_graph(lake_graph_csv: Path) -> np.ndarray:
     """Return sorted unique int64 lake IDs from the GRIT PLD lake graph CSV, excluding -1."""
-    ids = pd.read_csv(lake_graph_csv)["lake_id"].to_numpy(dtype=np.int64)
+    ids = pd.read_csv(lake_graph_csv, usecols=["lake_id"])["lake_id"].to_numpy(dtype=np.int64)
     return np.unique(ids[ids != -1])
 
 
@@ -89,6 +89,8 @@ def _determine_ecmwf_init_dates(ecmwf_base_dir: Path, probe_var: str = "tp") -> 
     """Return sorted unique init_dates found across all monthly CSV files for probe_var."""
     var_dir = ecmwf_base_dir / probe_var
     monthly_files = sorted(var_dir.glob(f"ecmwf_per_lake_{probe_var}_????-??.csv"))
+    if not monthly_files:
+        raise FileNotFoundError(f"No ECMWF monthly files found in {var_dir}")
     df = pd.concat([pd.read_csv(f, usecols=["init_date"]) for f in monthly_files])
     dates = pd.to_datetime(df["init_date"], errors="coerce").dt.normalize().dropna().unique()
     return pd.DatetimeIndex(sorted(dates))
@@ -129,8 +131,6 @@ def load_ecmwf_climate_arrays(
         df = df.dropna(subset=["init_date", "lake_id"])
         df["lake_id"]   = df["lake_id"].astype(np.int64)
 
-        # Pivot to (n_lakes, n_init_dates * forecast_horizon), reindex to exact target shape,
-        # fill missing with 0, then reshape to (n_lakes, n_init_dates, forecast_horizon).
         pivot = (
             df.pivot_table(index="lake_id", columns=["init_date", "forecast_day"], values=var, aggfunc="first")
             .reindex(index=lake_ids, columns=target_cols)
