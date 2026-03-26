@@ -30,7 +30,7 @@ LAKE_GRAPH_CSV = Path(
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/training_data_lake_based_great_mekong_20260325"
+    "/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202512_qc"
 )
 
 # Date range limits for the datacube (init_dates outside this window are excluded).
