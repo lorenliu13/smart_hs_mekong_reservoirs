@@ -32,7 +32,7 @@ model:
   static_embed_dim: 16
   embed_dim: 64
   hidden_dim: 64
-  st_blocks: 2
+  st_blocks: 1
   gps_layers_per_block: 2
   gps_heads: 4
   dropout: 0.1
@@ -45,7 +45,7 @@ training:
   train_frac: 0.70
   val_frac: 0.15
   test_frac: 0.15
-  batch_size: 8
+  batch_size: 64
   lr: 0.001
   num_epochs: 100
   patience: 20             # early-stop if val loss does not improve for 20 epochs

@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
 #SBATCH --partition=short         # GPU nodes are on the htc cluster, short partition (max 12h)
-#SBATCH --gres=gpu:1 --constraint='gpu_cc:8.0'
+#SBATCH --gres=gpu:a100:1
 # --constraint='gpu_cc:8.0' targets cc>=8.0 GPUs: A100, H100, L40S, RTXA6000
 # This ensures BF16 and torch.compile() support; widens scheduling vs naming a specific model.
 #
@@ -24,16 +24,44 @@
 module load Anaconda3
 conda activate $DATA/py311_torch
 
-# Adjust paths to your data on the cluster
-DYNAMIC_DATACUBE="/path/to/dynamic_datacube.nc"
-STATIC_DATACUBE="/path/to/static_datacube.nc"
+# ── Shared paths ───────────────────────────────────────────────────────────────
+TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/training_data_lake_based_great_mekong_20260325"
 
-cd /path/to/smart_hs_mekong_mega_reservoirs/swot_gnn
+WSE_DATACUBE="$TRAINING_FOLDER/swot_lake_wse_datacube_wse_norm.nc"
+ERA5_DATACUBE="$TRAINING_FOLDER/swot_lake_era5_climate_datacube.nc"
+ECMWF_DATACUBE="$TRAINING_FOLDER/swot_lake_ecmwf_forecast_datacube.nc"
+STATIC_DATACUBE="$TRAINING_FOLDER/swot_lake_static_datacube.nc"
+WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
+LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 
-python run_training.py \
-    --config configs/lake_datacube.yaml \
-    --dynamic-datacube "$DYNAMIC_DATACUBE" \
+SAVE_DIR="checkpoints"
+RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01"
+
+# ── Code directory ─────────────────────────────────────────────────────────────
+cd /data/ouce-grit/cenv1160/smart_hs/smart_hs_mekong_mega_reservoirs/swot_gnn
+
+# ── Training ───────────────────────────────────────────────────────────────────
+python run_lake_exp01.py \
+    --config configs/exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01.yaml \
+    --wse-datacube    "$WSE_DATACUBE" \
+    --era5-datacube   "$ERA5_DATACUBE" \
+    --ecmwf-datacube  "$ECMWF_DATACUBE" \
     --static-datacube "$STATIC_DATACUBE" \
-    --save-dir checkpoints \
-    --run-name model_v1_lake \
+    --lake-graph      "$LAKE_GRAPH" \
+    --save-dir        "$SAVE_DIR" \
+    --run-name        "$RUN_NAME" \
     --device cuda
+
+# ── Inference (runs only if training succeeded) ────────────────────────────────
+python run_inference_lake.py \
+    --wse-datacube    "$WSE_DATACUBE" \
+    --era5-datacube   "$ERA5_DATACUBE" \
+    --ecmwf-datacube  "$ECMWF_DATACUBE" \
+    --static-datacube "$STATIC_DATACUBE" \
+    --wse-stats-csv   "$WSE_STATS_CSV" \
+    --lake-graph      "$LAKE_GRAPH" \
+    --save-dir        "$SAVE_DIR" \
+    --run-name        "$RUN_NAME" \
+    --device cuda
+
+
