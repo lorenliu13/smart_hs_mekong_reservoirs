@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
 #SBATCH --partition=short
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:1
 #
 # Smoke-test: runs 1 epoch of training + full inference pipeline.
 # Use this to verify the end-to-end pipeline before submitting the full job.
