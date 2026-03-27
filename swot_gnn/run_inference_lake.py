@@ -110,6 +110,7 @@ def run_inference(ds, model, device, split_name=''):
             if labels_np.ndim == 1:          # forecast_horizon == 1 backward compat
                 labels_np = labels_np[:, np.newaxis]
                 mask_np   = mask_np[:, np.newaxis]
+            if pred_cpu.ndim == 1:
                 pred_cpu  = pred_cpu[:, np.newaxis]
 
             j         = int(ds.valid_starts[idx])
