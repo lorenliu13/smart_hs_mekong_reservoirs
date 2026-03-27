@@ -32,7 +32,7 @@ SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_re
 RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01_test"
 
 # ── Code directory ─────────────────────────────────────────────────────────────
-cd /data/ouce-grit/cenv1160/smart_hs/smart_hs_mekong_mega_reservoirs/swot_gnn
+cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
 
 # ── Training (1 epoch, patience 1 — just checks the pipeline runs) ─────────────
 echo "=== [1/2] Smoke-test training (1 epoch) ==="
