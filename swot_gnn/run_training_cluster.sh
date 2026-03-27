@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
 #SBATCH --partition=short         # GPU nodes are on the htc cluster, short partition (max 12h)
-#SBATCH --gres=gpu:1 --constraint='gpu_cc:8.0'
+#SBATCH --gres=gpu:1
 # --constraint='gpu_cc:8.0' targets cc>=8.0 GPUs: A100, H100, L40S, RTXA6000
 # This ensures BF16 and torch.compile() support; widens scheduling vs naming a specific model.
 #
