@@ -4,4 +4,7 @@ numpy
 pandas
 scikit-learn
 xarray
+netCDF4
+h5netcdf
+scipy
 pyyaml

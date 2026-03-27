@@ -24,7 +24,7 @@
 set -e   # abort immediately if any command fails
 
 module load Anaconda3
-source activate $DATA/py311_torch
+conda activate $DATA/py311_torch
 
 # ── Shared paths ───────────────────────────────────────────────────────────────
 TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/training_data_lake_based_great_mekong_20260325"

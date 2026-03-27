@@ -16,10 +16,10 @@
 set -e   # abort immediately if any command fails
 
 module load Anaconda3
-source activate $DATA/py311_torch
+conda activate $DATA/py311_torch
 
 # ── Shared paths (keep in sync with run_training_cluster.sh) ──────────────────
-TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/training_data_lake_based_great_mekong_20260325"
+TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202512_qc"
 
 WSE_DATACUBE="$TRAINING_FOLDER/swot_lake_wse_datacube_wse_norm.nc"
 ERA5_DATACUBE="$TRAINING_FOLDER/swot_lake_era5_climate_datacube.nc"
