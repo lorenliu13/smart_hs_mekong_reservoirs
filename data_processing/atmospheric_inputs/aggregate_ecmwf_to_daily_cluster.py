@@ -64,13 +64,17 @@ warnings.filterwarnings("ignore")
 DATA_DIR   = Path(r"/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/hres")
 OUTPUT_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily/hres")
 
-START_YEAR  = 2023
+START_YEAR  = 2026
 START_MONTH = 1
-END_YEAR    = 2025
-END_MONTH   = 12
+END_YEAR    = 2026
+END_MONTH   = 2
 N_DAYS      = 10      # forecast days to retain per init date
 OVERWRITE   = True
 N_WORKERS   = 20       # parallel worker processes (one per variable×month task)
+
+# From this year onward, all variables are combined in a single _all.grib2 file
+# instead of separate per-variable files (e.g. hres_mekong_2026-01_all.grib2)
+ALL_IN_ONE_START_YEAR = 2026
 
 # ---------------------------------------------------------------------------
 # Variable metadata:  short_name → (col_name, agg_type, units)
@@ -144,17 +148,25 @@ def _suppress_fd2():
 
 
 def grib_file_path(data_dir: Path, year: int, month: int, var: str) -> Path:
+    if year >= ALL_IN_ONE_START_YEAR:
+        # All variables are stored in a single combined file from this year onward
+        return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_all.grib2"
     return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_{var}.grib2"
 
 
-def load_grib_variable(grib_path: Path) -> xr.DataArray | None:
+def load_grib_variable(grib_path: Path, filter_var: str | None = None) -> xr.DataArray | None:
     """
     Load one variable from a GRIB2 file.
 
     cfgrib.open_datasets returns a list of xr.Dataset objects (one per GRIB
-    message type / type-of-level combination found in the file).  For the
-    single-variable per-file layout used here, the first dataset contains the
-    variable of interest.
+    message type / type-of-level combination found in the file).
+
+    Parameters
+    ----------
+    grib_path  : path to the GRIB2 file
+    filter_var : ECMWF short name (e.g. "tp", "2t") to extract from a
+                 combined all-variables file.  Pass None for the legacy
+                 per-variable file layout where no filtering is needed.
 
     Returns an xr.DataArray with dims (time, step, latitude, longitude),
     or None if the file does not exist or cannot be read.
@@ -164,9 +176,21 @@ def load_grib_variable(grib_path: Path) -> xr.DataArray | None:
         return None
     try:
         with _suppress_fd2():
-            ds_list = cfgrib.open_datasets(str(grib_path))
+            if filter_var is not None:
+                # Combined file: use filter_by_keys to select only messages
+                # for the requested variable, avoiding loading the entire file
+                ds_list = cfgrib.open_datasets(
+                    str(grib_path),
+                    filter_by_keys={"shortName": filter_var},
+                )
+            else:
+                ds_list = cfgrib.open_datasets(str(grib_path))
+        if not ds_list:
+            label = f" (var={filter_var})" if filter_var else ""
+            print(f"  [EMPTY] {grib_path.name}{label}")
+            return None
         ds  = ds_list[0]
-        key = list(ds.data_vars)[0]   # first (and usually only) data variable = the ECMWF short name
+        key = list(ds.data_vars)[0]   # first data variable = the ECMWF short name
         da  = ds[key]
         # Files with a single init date may lack a 'time' dimension; add it so
         # downstream code can always index with da.isel(time=t_idx)
@@ -292,8 +316,9 @@ def process_variable_month(
         print(f"  {col_name:6s}  {month_str}: skipped (already exists)")
         return
 
-    grib_path = grib_file_path(data_dir, year, month, var)
-    da = load_grib_variable(grib_path)
+    grib_path  = grib_file_path(data_dir, year, month, var)
+    filter_var = var if year >= ALL_IN_ONE_START_YEAR else None
+    da = load_grib_variable(grib_path, filter_var=filter_var)
     if da is None:
         return
 
