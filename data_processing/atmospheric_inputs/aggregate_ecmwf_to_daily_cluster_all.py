@@ -311,6 +311,7 @@ def process_variable_month(
         return
 
     grib_path = grib_file_path(data_dir, year, month)
+    print(f"  {col_name:6s}  {month_str}: loading from {grib_path.name} …")
     da = load_grib_variable(grib_path, var)
     if da is None:
         return
@@ -320,6 +321,8 @@ def process_variable_month(
     hrs            = _step_hours(da)
     # Cap n_days to what the file actually contains (max step ÷ 24)
     n_days_use     = min(n_days, int(hrs.max()) // 24)
+    print(f"  {col_name:6s}  {month_str}: {len(init_times_raw)} init date(s), "
+          f"{len(hrs)} steps (max {int(hrs.max())} h → {n_days_use} forecast days)")
 
     if n_days_use < n_days:
         print(f"    Warning: only {n_days_use} forecast days available in {grib_path.name}.")
@@ -427,9 +430,23 @@ def main() -> None:
                     N_DAYS, OUTPUT_DIR, OVERWRITE,
                 ))
 
-    print(f"Dispatching {len(tasks)} task(s) across {N_WORKERS} worker(s) …")
-    print(f"Input format : hres_mekong_<YYYY-MM>_all.grib2  (all vapythriables combined)")
-    print(f"Output root  : {OUTPUT_DIR}\n")
+    n_vars   = len(VAR_META)
+    n_months = len(tasks) // n_vars
+    print("=" * 60)
+    print("ECMWF IFS HRES  →  Daily NetCDF aggregation")
+    print("=" * 60)
+    print(f"  Period      : {START_YEAR}-{START_MONTH:02d}  →  {END_YEAR}-{END_MONTH:02d}")
+    print(f"  Variables   : {n_vars}  ({', '.join(VAR_META.keys())})")
+    print(f"  Forecast days kept : {N_DAYS}")
+    print(f"  Months to process  : {n_months}")
+    print(f"  Total tasks : {len(tasks)}  ({n_vars} vars × {n_months} month(s))")
+    print(f"  Workers     : {N_WORKERS}")
+    print(f"  Overwrite   : {OVERWRITE}")
+    print(f"  Input dir   : {DATA_DIR}")
+    print(f"  Output dir  : {OUTPUT_DIR}")
+    print("=" * 60)
+    print(f"Input format : hres_mekong_<YYYY-MM>_all.grib2  (all variables combined)")
+    print(f"Dispatching {len(tasks)} task(s) across {N_WORKERS} worker(s) …\n")
 
     # Process all tasks in parallel using a multiprocessing pool.
     # Each worker handles one (variable, month) combination independently.
@@ -438,7 +455,10 @@ def main() -> None:
     with Pool(processes=N_WORKERS) as pool:
         pool.map(_worker, tasks)
 
-    print(f"\nDone.")
+    print(f"\n{'=' * 60}")
+    print(f"All {len(tasks)} task(s) complete.")
+    print(f"Output written to: {OUTPUT_DIR}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
