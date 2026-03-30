@@ -35,7 +35,7 @@ SAVE_DIR = Path(
 
 # Date range limits for the datacube (init_dates outside this window are excluded).
 START_DATE = "2023-10-01"
-END_DATE   = "2025-12-31"
+END_DATE   = "2026-03-01"
 
 # Number of lead-days in the ECMWF IFS forecast per initialisation date.
 FORECAST_HORIZON = 10

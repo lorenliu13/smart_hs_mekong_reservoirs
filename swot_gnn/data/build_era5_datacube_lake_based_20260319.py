@@ -32,7 +32,7 @@ SAVE_DIR = Path(
 )
 
 START_DATE = "2023-10-01"
-END_DATE   = "2025-12-31"
+END_DATE   = "2026-03-01"
 
 # Raw ERA5-Land variable names as they appear in the per-lake CSV files.
 ERA5_RAW_VARS = [

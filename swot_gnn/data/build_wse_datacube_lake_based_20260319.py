@@ -37,7 +37,7 @@ SAVE_DIR = Path(
 )
 
 START_DATE = "2023-10-01"
-END_DATE   = "2025-12-31"
+END_DATE   = "2026-03-01"
 
 # Which form of WSE to use as the "latest_wse" model input:
 #   "wse_norm"    — (wse - per-lake mean) / per-lake std  ← default, dimensionless
