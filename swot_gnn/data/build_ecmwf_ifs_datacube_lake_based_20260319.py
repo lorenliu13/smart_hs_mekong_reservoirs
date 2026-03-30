@@ -34,8 +34,9 @@ SAVE_DIR = Path(
 )
 
 # Date range limits for the datacube (init_dates outside this window are excluded).
-START_DATE = "2023-10-01"
-END_DATE   = "2026-03-01"
+# Specify as YYYY-MM; start expands to the 1st of the month, end to the last day (inclusive).
+START_MONTH = "2023-10"
+END_MONTH   = "2026-02"
 
 # Number of lead-days in the ECMWF IFS forecast per initialisation date.
 FORECAST_HORIZON = 10
@@ -203,10 +204,12 @@ if __name__ == "__main__":
     print(f"  Found {len(all_init_dates)} ECMWF init_dates "
           f"({all_init_dates[0].date()} … {all_init_dates[-1].date()})")
 
+    start_date = pd.Timestamp(START_MONTH + "-01")
+    end_date   = pd.Timestamp(END_MONTH   + "-01") + pd.offsets.MonthEnd(0)
     all_init_dates = all_init_dates[
-        (all_init_dates >= START_DATE) & (all_init_dates <= END_DATE)
+        (all_init_dates >= start_date) & (all_init_dates <= end_date)
     ]
-    print(f"  After date filter [{START_DATE} … {END_DATE}]: {len(all_init_dates)} init_dates")
+    print(f"  After date filter [{start_date.date()} … {end_date.date()}]: {len(all_init_dates)} init_dates")
 
     build_ecmwf_forecast_datacube(
         ecmwf_base_dir=ECMWF_BASE_DIR,

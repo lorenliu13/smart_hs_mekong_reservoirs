@@ -31,8 +31,9 @@ SAVE_DIR = Path(
     "/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202502_qc"
 )
 
-START_DATE = "2023-10-01"
-END_DATE   = "2026-03-01"
+# Specify as YYYY-MM; start expands to the 1st of the month, end to the last day (inclusive).
+START_MONTH = "2023-10"
+END_MONTH   = "2026-02"
 
 # Raw ERA5-Land variable names as they appear in the per-lake CSV files.
 ERA5_RAW_VARS = [
@@ -193,7 +194,9 @@ if __name__ == "__main__":
     lake_ids = load_lake_ids_from_graph(LAKE_GRAPH_CSV)
     print(f"  Found {len(lake_ids)} lakes in GRIT PLD lake graph.")
 
-    all_dates = pd.date_range(START_DATE, END_DATE, freq="D")
+    start_date = pd.Timestamp(START_MONTH + "-01")
+    end_date   = pd.Timestamp(END_MONTH   + "-01") + pd.offsets.MonthEnd(0)
+    all_dates = pd.date_range(start_date, end_date, freq="D")
 
     build_era5_climate_datacube(
         era5_base_dir=ERA5_BASE_DIR,
