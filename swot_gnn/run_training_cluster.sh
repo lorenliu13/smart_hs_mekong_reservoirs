@@ -39,6 +39,9 @@ LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
 RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202602_v01"
 
+# ── Code directory ─────────────────────────────────────────────────────────────
+cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
+
 # ── Training ───────────────────────────────────────────────────────────────────
 python run_lake_exp01.py \
     --config configs/exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01.yaml \
