@@ -24,8 +24,6 @@
 # NOTE:   static_dim is auto-detected at runtime from swot_lake_static_datacube.nc
 #         and overrides the placeholder value below before the model is built.
 
-seed: 42          # random seed — override with --seed on the CLI
-
 model:
   swot_dim: 8              # obs_mask, latest_wse, latest_wse_u, latest_wse_std,
                             # latest_area_total, days_since_last_obs, doy_sin, doy_cos

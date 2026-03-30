@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --partition=short         # GPU nodes are on the htc cluster, short partition (max 12h)
 #SBATCH --gres=gpu:1
 
@@ -26,14 +26,14 @@ WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
 LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
-RUN_NAME="exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602_v01"
+RUN_NAME="exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602"
 
 # ── Code directory ─────────────────────────────────────────────────────────────
 cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
 
 # ── Training ───────────────────────────────────────────────────────────────────
-python run_lake_exp01.py \
-    --config configs/exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01.yaml \
+python run_training_lake_wse1d.py \
+    --config configs/exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202602.yaml \
     --wse-datacube    "$WSE_DATACUBE" \
     --era5-datacube   "$ERA5_DATACUBE" \
     --ecmwf-datacube  "$ECMWF_DATACUBE" \

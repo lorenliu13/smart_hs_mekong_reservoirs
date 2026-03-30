@@ -1,5 +1,7 @@
 # SWOT-GNN default hyperparameters for 1-day-ahead WSE forecasting
 
+seed: 42          # random seed — override with --seed on the CLI
+
 model:
   swot_dim: 5       # SWOT features: obs_mask, latest_wse, days_since_last_obs, time_doy_sin, time_doy_cos
   climate_dim: 7    # Climate forcing: LWd, P, Pres, RelHum, SWd, Temp, Wind

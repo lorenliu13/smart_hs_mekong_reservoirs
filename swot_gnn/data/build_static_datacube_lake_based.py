@@ -32,6 +32,8 @@ import xarray as xr
 from pathlib import Path
 from tqdm import tqdm
 
+from datacube_utils import load_lake_ids_from_graph
+
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 LAKE_GRAPH_CSV = Path(
@@ -72,20 +74,6 @@ STATIC_EXCLUDE_COLS = [
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-
-def load_lake_ids_from_graph(lake_graph_csv: Path) -> np.ndarray:
-    """
-    Extract unique lake IDs from the GRIT PLD lake graph CSV.
-    Excludes the terminal node (-1).
-
-    Returns:
-        Sorted int64 array of lake IDs.
-    """
-    lake_graph = pd.read_csv(lake_graph_csv)
-    ids = lake_graph['lake_id'].to_numpy(dtype=np.int64)
-    ids = np.unique(ids)
-    ids = ids[ids != -1]
-    return ids
 
 
 def prepare_static_attrs(

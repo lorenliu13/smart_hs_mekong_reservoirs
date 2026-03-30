@@ -21,6 +21,8 @@ import xarray as xr
 from pathlib import Path
 from tqdm import tqdm
 
+from datacube_utils import load_lake_ids_from_graph
+
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 SWOT_LAKE_WSE_CSV = Path(
@@ -48,20 +50,6 @@ WSE_OPTION = "wse_norm"   # "wse_norm" | "wse_anomaly" | "wse"
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-
-def load_lake_ids_from_graph(lake_graph_csv: Path) -> np.ndarray:
-    """
-    Extract unique lake IDs from the GRIT PLD lake graph CSV.
-    Excludes the terminal node (-1).
-
-    Returns:
-        Sorted int64 array of lake IDs.
-    """
-    lake_graph = pd.read_csv(lake_graph_csv)
-    ids = lake_graph['lake_id'].to_numpy(dtype=np.int64)
-    ids = np.unique(ids)
-    ids = ids[ids != -1]  # exclude terminal node
-    return ids
 
 
 def build_swot_wse_arrays(

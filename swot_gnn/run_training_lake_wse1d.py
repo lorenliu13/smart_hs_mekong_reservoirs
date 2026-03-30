@@ -9,7 +9,7 @@ Architecture: SWOT-GNN (InputEncoder -> STBlock x N -> ForecastHead)
 Loss:         ObservedMSELoss — MSE at lakes with a SWOT observation only.
 
 Usage:
-  python run_lake_exp01.py \\
+  python run_training_lake.py \\
     --config     configs/exp01_nextday_wse.yaml \\
     --wse-datacube   /path/to/swot_lake_wse_datacube_wse_norm.nc \\
     --era5-datacube  /path/to/swot_lake_era5_climate_datacube.nc \\
@@ -20,9 +20,12 @@ Usage:
 """
 import argparse
 import csv
+import json
+import shutil
 import sys
 import time
 import yaml
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -97,6 +100,14 @@ def _run_epoch(model, loader, criterion, device, optimizer=None, grad_clip=1.0):
 def train(cfg, args):
     device = torch.device(args.device)
 
+    if args.seed is not None:
+        import random
+        import numpy as np
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+
     # ── Build datasets ──────────────────────────────────────────────────────
     train_ds, val_ds, test_ds, norm_stats = build_temporal_dataset_from_lake_datacubes(
         wse_datacube_path        = args.wse_datacube,
@@ -138,16 +149,20 @@ def train(cfg, args):
     print(f"Model: {n_params:,} trainable parameters")
 
     # ── Output directory ────────────────────────────────────────────────────
-    run_dir = Path(args.save_dir) / args.run_name
+    run_dir  = Path(args.save_dir) / args.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    save_path = run_dir / "best_model.pt"
+    tmp_ckpt = run_dir / "_best_model_tmp.pt"
     print(f"\nRun: {args.run_name}  →  {run_dir}\n")
+
+    # Freeze a copy of the source config at run time
+    shutil.copy2(args.config, run_dir / "config.yaml")
 
     # ── Training loop ───────────────────────────────────────────────────────
     best_val_loss    = float("inf")
     best_epoch       = 0
     patience_counter = 0
     train_losses, val_losses = [], []
+    lr_history, ts_history   = [], []
     stopped_early = False
     training_start = time.time()
 
@@ -163,6 +178,9 @@ def train(cfg, args):
         scheduler.step(avg_val)
 
         lr = optimizer.param_groups[0]["lr"]
+        lr_history.append(lr)
+        ts_history.append(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
         print(f"Epoch {epoch+1:>3}/{cfg['training']['num_epochs']} | "
               f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
               f"Best: ep{best_epoch+1} ({best_val_loss:.4f}) | LR: {lr:.2e} | "
@@ -172,7 +190,7 @@ def train(cfg, args):
             best_val_loss    = avg_val
             best_epoch       = epoch
             patience_counter = 0
-            torch.save(model.state_dict(), save_path)
+            torch.save(model.state_dict(), tmp_ckpt)
         else:
             patience_counter += 1
 
@@ -188,8 +206,13 @@ def train(cfg, args):
     print(f"\nTotal training time: {h:02d}:{m:02d}:{s:02d} "
           f"({total_training_secs:.1f}s, {len(train_losses)} epochs)")
 
+    # ── Rename checkpoint to encode best epoch ───────────────────────────────
+    final_ckpt_name = f"best_epoch{best_epoch + 1:03d}.pt"
+    final_ckpt      = run_dir / final_ckpt_name
+    tmp_ckpt.rename(final_ckpt)
+
     # ── Re-save checkpoint enriched with training history ───────────────────
-    state_dict = torch.load(save_path, map_location="cpu", weights_only=False)
+    state_dict = torch.load(final_ckpt, map_location="cpu", weights_only=False)
     torch.save({
         "model_state_dict": state_dict,
         "train_losses":  train_losses,
@@ -199,14 +222,58 @@ def train(cfg, args):
         "stopped_early": stopped_early,
         "norm_stats":    norm_stats,
         "config":        cfg,
-    }, save_path)
+    }, final_ckpt)
 
-    # ── Save losses.csv ─────────────────────────────────────────────────────
-    with open(run_dir / "losses.csv", "w", newline="") as f:
+    # ── Save training_log.csv ────────────────────────────────────────────────
+    with open(run_dir / "training_log.csv", "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["epoch", "train_loss", "val_loss"])
-        for i, (tl, vl) in enumerate(zip(train_losses, val_losses)):
-            writer.writerow([i + 1, f"{tl:.8f}", f"{vl:.8f}"])
+        writer.writerow(["epoch", "train_loss", "val_loss", "lr", "timestamp"])
+        for i, (tl, vl, lr_i, ts_i) in enumerate(
+                zip(train_losses, val_losses, lr_history, ts_history)):
+            writer.writerow([i + 1, f"{tl:.8f}", f"{vl:.8f}", f"{lr_i:.2e}", ts_i])
+
+    # ── Save summary.json ────────────────────────────────────────────────────
+    summary = {
+        "run_name":         args.run_name,
+        "seed":             args.seed,
+        "best_epoch":       best_epoch + 1,
+        "best_val_loss":    float(best_val_loss),
+        "total_epochs_run": len(train_losses),
+        "stopped_early":    stopped_early,
+        "runtime_seconds":  round(total_training_secs, 1),
+        "checkpoint":       final_ckpt_name,
+    }
+    with open(run_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    # ── Append to registry.csv ───────────────────────────────────────────────
+    registry_path = Path(args.save_dir) / "registry.csv"
+    exp_id        = args.run_name.split("_")[0]
+    reg_header = [
+        "run_name", "exp_id", "seed", "best_epoch", "best_val_loss",
+        "total_epochs", "stopped_early", "runtime_min",
+        "lr", "seq_len", "st_blocks", "status",
+    ]
+    reg_row = [
+        args.run_name,
+        exp_id,
+        args.seed,
+        best_epoch + 1,
+        f"{best_val_loss:.6f}",
+        len(train_losses),
+        stopped_early,
+        round(total_training_secs / 60, 2),
+        cfg["training"]["lr"],
+        cfg["training"]["seq_len"],
+        cfg["model"].get("st_blocks", ""),
+        "done",
+    ]
+    write_header = not registry_path.exists()
+    with open(registry_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(reg_header)
+        writer.writerow(reg_row)
 
     # ── Save training_curve.png ─────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(9, 4))
@@ -217,7 +284,7 @@ def train(cfg, args):
                label=f"Best (epoch {best_epoch + 1})")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MSE loss (observed lakes)")
-    ax.set_title(f"Exp01: 1-day WSE — {args.run_name}")
+    ax.set_title(f"{args.run_name}")
     ax.legend()
     plt.tight_layout()
     fig.savefig(run_dir / "training_curve.png", dpi=120)
@@ -225,8 +292,9 @@ def train(cfg, args):
 
     # ── Save run_config.yaml ────────────────────────────────────────────────
     run_config = {
-        "experiment": "exp01_nextday_wse",
-        "run_name":   args.run_name,
+        "run_name": args.run_name,
+        "exp_id":   args.run_name.split("_")[0],
+        "seed":     args.seed,
         "data": {
             "wse_datacube":    args.wse_datacube,
             "era5_datacube":   args.era5_datacube,
@@ -249,10 +317,13 @@ def train(cfg, args):
         yaml.dump(run_config, f, default_flow_style=False, sort_keys=False)
 
     print(f"\nOutputs saved to {run_dir}/")
-    print(f"  best_model.pt      — model weights + full training history")
-    print(f"  losses.csv         — per-epoch train/val loss")
-    print(f"  training_curve.png — loss plot")
-    print(f"  run_config.yaml    — hyperparameters + data paths + result summary")
+    print(f"  {final_ckpt_name:<26} — model weights + full training history")
+    print(f"  config.yaml                — frozen copy of source config")
+    print(f"  training_log.csv           — per-epoch train/val loss, lr, timestamp")
+    print(f"  summary.json               — lightweight result summary")
+    print(f"  training_curve.png         — loss plot")
+    print(f"  run_config.yaml            — hyperparameters + data paths + result summary")
+    print(f"Registry row appended → {registry_path}")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -260,11 +331,11 @@ def train(cfg, args):
 def main():
     script_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
-        description="Exp01: 1-day-ahead lake WSE forecasting (SWOT-GNN)"
+        description="1-day-ahead lake WSE forecasting (SWOT-GNN)"
     )
     parser.add_argument(
-        "--config", default=str(script_dir / "configs" / "exp01_nextday_wse.yaml"),
-        help="Path to YAML config (default: configs/exp01_nextday_wse.yaml)",
+        "--config", default=str(script_dir / "configs" / "default.yaml"),
+        help="Path to YAML config (default: configs/default.yaml)",
     )
     parser.add_argument("--wse-datacube",    required=True,
                         help="swot_lake_wse_datacube_*.nc")
@@ -278,8 +349,8 @@ def main():
                         help="GRIT PLD lake graph CSV")
     parser.add_argument("--save-dir",  default="checkpoints",
                         help="Root directory for all run outputs")
-    parser.add_argument("--run-name",  default="exp01_nextday_wse_v1",
-                        help="Versioned run subfolder name (e.g. exp01_v1)")
+    parser.add_argument("--run-name",  required=True,
+                        help="Versioned run subfolder name (e.g. exp03_mekong_wse1d_era5ifs_gritv06_202312_202602_swotgnn_s42)")
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -293,6 +364,10 @@ def main():
         "--patience", type=int, default=None,
         help="Override early-stop patience from config",
     )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Random seed — overrides the seed in the config file",
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -303,6 +378,13 @@ def main():
         cfg["training"]["num_epochs"] = args.num_epochs
     if args.patience is not None:
         cfg["training"]["patience"] = args.patience
+
+    # Seed priority: CLI --seed > config seed > fallback 42
+    if args.seed is None:
+        args.seed = cfg.get("seed", 42)
+
+    # Bake seed into the run name so the folder is always self-describing
+    args.run_name = f"{args.run_name}_s{args.seed}"
 
     assert cfg["training"]["forecast_horizon"] == 1, (
         "run_lake_exp01.py is designed for forecast_horizon=1. "

@@ -19,6 +19,8 @@ import xarray as xr
 from pathlib import Path
 from tqdm import tqdm
 
+from datacube_utils import load_lake_ids_from_graph, derive_climate_vars
+
 # ─── Configuration ─────────────────────────────────────────────────────────────
 
 ECMWF_BASE_DIR = Path(
@@ -50,40 +52,6 @@ ERA5_RAW_VARS = [
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-
-def load_lake_ids_from_graph(lake_graph_csv: Path) -> np.ndarray:
-    """Return sorted unique int64 lake IDs from the GRIT PLD lake graph CSV, excluding -1."""
-    ids = pd.read_csv(lake_graph_csv, usecols=["lake_id"])["lake_id"].to_numpy(dtype=np.int64)
-    return np.unique(ids[ids != -1])
-
-
-def derive_climate_vars(raw: dict) -> dict:
-    """
-    Derive 13 model climate variables from raw ERA5-Land / ECMWF IFS variables.
-
-    Accepts arrays of any shape (2-D or 3-D). Element-wise numpy operations
-    broadcast correctly for both ERA5 (n_lakes, n_dates) and ECMWF
-    (n_lakes, n_init_dates, forecast_horizon) arrays.
-
-    Returns:
-        Dict with keys: LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd,
-                        swvl1, swvl2, swvl3, swvl4
-    """
-    return {
-        "LWd":   (raw["strd"]  / 86400.0).astype(np.float32),
-        "SWd":   (raw["ssrd"]  / 86400.0).astype(np.float32),
-        "P":     (raw["tp"]    * 1000.0).astype(np.float32),
-        "Pres":  raw["sp"].astype(np.float32),
-        "Temp":  raw["t2m"].astype(np.float32),
-        "Td":    raw["d2m"].astype(np.float32),
-        "Wind":  np.sqrt(raw["u10"]**2 + raw["v10"]**2).astype(np.float32),
-        "sf":    (raw["sf"]    * 1000.0).astype(np.float32),
-        "sd":    (raw["sd"]    * 1000.0).astype(np.float32),
-        "swvl1": raw["swvl1"].astype(np.float32),
-        "swvl2": raw["swvl2"].astype(np.float32),
-        "swvl3": raw["swvl3"].astype(np.float32),
-        "swvl4": raw["swvl4"].astype(np.float32),
-    }
 
 
 def _determine_ecmwf_init_dates(ecmwf_base_dir: Path, probe_var: str = "tp") -> pd.DatetimeIndex:
