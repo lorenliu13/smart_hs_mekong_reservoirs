@@ -45,7 +45,7 @@ SAVE_DIR = Path(
 
 # Reach-level predictor attributes  (reach_id == fid in the reaches table)
 REACH_ATTRS_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/Grit_ARC/output_v06/attrs"
+    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/attrs"
     "/GRITv06_reach_predictors_shared_MEKO_YANG.csv"
 )
 
