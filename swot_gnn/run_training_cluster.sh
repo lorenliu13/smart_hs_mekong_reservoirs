@@ -1,25 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=run_lake_exp01
-#SBATCH --output=run_lake_exp01.out
-#SBATCH --error=run_lake_exp01.err
+#SBATCH --job-name=run_lake_exp02
+#SBATCH --output=run_lake_exp02.out
+#SBATCH --error=run_lake_exp02.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH --partition=short         # GPU nodes are on the htc cluster, short partition (max 12h)
 #SBATCH --gres=gpu:1
-# --constraint='gpu_cc:8.0' targets cc>=8.0 GPUs: A100, H100, L40S, RTXA6000
-# This ensures BF16 and torch.compile() support; widens scheduling vs naming a specific model.
-#
-# Lower the constraint to relax scheduling pressure:
-#   gpu_cc:7.0  → also includes V100 (cc7.0)               htc-g[035,037-038,045-049]
-#   gpu_cc:6.0  → also includes P100 (cc6.0)               htc-g[032-034]  (fp32 only, no BF16/compile)
-#
-# Or pin to a specific model for reproducibility:
-#   --gres=gpu:l40s:1   L40S  46GB cc12.9  htc-g[061-084] (24 nodes x4) — most available
-#   --gres=gpu:a100:1   A100  40GB cc8.0   htc-g[015-019]  (5 nodes x4)
-#   --gres=gpu:h100:1   H100  82GB cc12.6  htc-g[053-058]
 
 set -e   # abort immediately if any command fails
 
@@ -37,7 +26,7 @@ WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
 LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
-RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202602_v01"
+RUN_NAME="exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602_v01"
 
 # ── Code directory ─────────────────────────────────────────────────────────────
 cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
