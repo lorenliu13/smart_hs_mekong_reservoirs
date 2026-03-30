@@ -4,7 +4,7 @@
 #SBATCH --error=run_lake_exp02.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
 #SBATCH --partition=short         # GPU nodes are on the htc cluster, short partition (max 12h)
@@ -27,6 +27,7 @@ LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
 RUN_NAME="exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602"
+SEED=42
 
 # ── Code directory ─────────────────────────────────────────────────────────────
 cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
@@ -41,6 +42,7 @@ python run_training_lake_wse1d.py \
     --lake-graph      "$LAKE_GRAPH" \
     --save-dir        "$SAVE_DIR" \
     --run-name        "$RUN_NAME" \
+    --seed            $SEED \
     --device cuda
 
 # ── Inference (runs only if training succeeded) ────────────────────────────────
@@ -53,6 +55,7 @@ python run_inference_lake.py \
     --lake-graph      "$LAKE_GRAPH" \
     --save-dir        "$SAVE_DIR" \
     --run-name        "$RUN_NAME" \
+    --seed            $SEED \
     --device cuda
 
 

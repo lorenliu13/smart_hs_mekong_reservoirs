@@ -1,9 +1,9 @@
 """
-Inference script for Exp01: 1-day-ahead lake WSE forecasting.
+Inference script for 1-day-ahead lake WSE forecasting.
 
-Loads the best checkpoint saved by run_lake_exp01.py, re-builds the exact
-train / val / test splits from the original datacubes, runs forward passes,
-denormalises predictions, and writes result CSVs + per-lake metrics.
+Loads the best checkpoint saved by run_training_lake_wse1d.py, re-builds the
+exact train / val / test splits from the original datacubes, runs forward
+passes, denormalises predictions, and writes result CSVs + per-lake metrics.
 
 Usage:
   python run_inference_lake.py \\
@@ -14,10 +14,16 @@ Usage:
     --wse-stats-csv   /path/to/lake_wse_norm_stats.csv \\
     --lake-graph      /path/to/gritv06_great_mekong_pld_lake_graph_0sqkm.csv \\
     --save-dir        checkpoints \\
-    --run-name        exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01 \\
+    --run-name        exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602 \\
+    --seed            42 \\
     --device          cuda
+
+Note: --run-name should be the base name passed to training (without the
+_s{seed} suffix).  The seed suffix is appended automatically to match the
+directory created by run_training_lake_wse1d.py.
 """
 import argparse
+import json
 import sys
 import yaml
 from pathlib import Path
@@ -163,7 +169,7 @@ def compute_lake_metrics(test_df: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Exp01: inference — load checkpoint, run predictions, save CSVs"
+        description="Inference — load checkpoint, run predictions, save CSVs"
     )
     parser.add_argument("--wse-datacube",    required=True,
                         help="swot_lake_wse_datacube_wse_norm.nc")
@@ -179,18 +185,32 @@ def main():
                         help="GRIT PLD lake graph CSV")
     parser.add_argument("--save-dir",  default="checkpoints",
                         help="Root directory for run outputs (same as training)")
-    parser.add_argument("--run-name",  default="exp01_nextday_wse_v1",
-                        help="Run subfolder name (must match the training run)")
+    parser.add_argument("--run-name",  required=True,
+                        help="Base run name passed to training (without _s{seed} suffix)")
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Compute device (default: cuda if available, else cpu)",
     )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Seed used during training (default: 42, same as training fallback)",
+    )
     args = parser.parse_args()
 
-    run_dir   = Path(args.save_dir) / args.run_name
-    ckpt_path = run_dir / "best_model.pt"
-    cfg_path  = run_dir / "run_config.yaml"
+    # Mirror the seed-suffix logic from run_training_lake_wse1d.py
+    if args.seed is None:
+        args.seed = 42
+    run_name_full = f"{args.run_name}_s{args.seed}"
+
+    run_dir  = Path(args.save_dir) / run_name_full
+    cfg_path = run_dir / "run_config.yaml"
+
+    # Resolve checkpoint name from summary.json (training writes best_epoch{NNN}.pt)
+    summary_path = run_dir / "summary.json"
+    with open(summary_path) as f:
+        summary = json.load(f)
+    ckpt_path = run_dir / summary["checkpoint"]
 
     # ── Load run config saved during training ─────────────────────────────────
     with open(cfg_path) as f:
