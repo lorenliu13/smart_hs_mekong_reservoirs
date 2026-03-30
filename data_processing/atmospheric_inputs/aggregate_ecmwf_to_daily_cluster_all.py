@@ -428,7 +428,7 @@ def main() -> None:
                 ))
 
     print(f"Dispatching {len(tasks)} task(s) across {N_WORKERS} worker(s) …")
-    print(f"Input format : hres_mekong_<YYYY-MM>_all.grib2  (all variables combined)")
+    print(f"Input format : hres_mekong_<YYYY-MM>_all.grib2  (all vapythriables combined)")
     print(f"Output root  : {OUTPUT_DIR}\n")
 
     # Process all tasks in parallel using a multiprocessing pool.
