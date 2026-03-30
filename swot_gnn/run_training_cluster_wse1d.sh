@@ -33,7 +33,7 @@ cd /home/cenv1160/code/smart_hs_mekong_reservoirs/swot_gnn
 
 # ── Training ───────────────────────────────────────────────────────────────────
 python run_training_lake_wse1d.py \
-    --config configs/exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202602.yaml \
+    --config configs/exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602.yaml \
     --wse-datacube    "$WSE_DATACUBE" \
     --era5-datacube   "$ERA5_DATACUBE" \
     --ecmwf-datacube  "$ECMWF_DATACUBE" \
