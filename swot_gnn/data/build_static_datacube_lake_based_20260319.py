@@ -51,15 +51,13 @@ REACH_ATTRS_CSV = Path(
 
 # Lake → all upstream segment IDs (comma-separated)
 LAKE_UPSTREAM_SEGS_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit"
-    "/GRIT_mekong_mega_reservoirs/reservoirs"
+    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
     "/gritv06_great_mekong_pld_lake_upstream_segments_0sqkm.csv"
 )
 
 # Reach table: reach_id = reach ID, segment_id = parent segment
 REACHES_WITH_LAKES_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit"
-    "/GRIT_mekong_mega_reservoirs/reaches"
+    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches"
     "/gritv06_reaches_great_mekong_with_lake_id.csv"
 )
 
