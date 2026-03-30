@@ -57,10 +57,10 @@ warnings.filterwarnings("ignore")
 DATA_DIR   = Path(r"/data/ouce-grit/cenv1160/smart_hs/raw_data/era5_land")
 OUTPUT_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land_daily")
 
-START_YEAR  = 2023
+START_YEAR  = 2026
 START_MONTH = 1
-END_YEAR    = 2025
-END_MONTH   = 12
+END_YEAR    = 2026
+END_MONTH   = 2
 OVERWRITE   = True
 N_WORKERS   = 20
 

@@ -74,10 +74,10 @@ OUTPUT_DIR = Path(
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
-START_YEAR  = 2023
+START_YEAR  = 2026
 START_MONTH = 1
-END_YEAR    = 2025
-END_MONTH   = 12
+END_YEAR    = 2026
+END_MONTH   = 2
 OVERWRITE   = True  # set True to reprocess months that already have a CSV
 N_WORKERS   = 20     # number of parallel worker processes (match --cpus-per-task in sbatch)
 
