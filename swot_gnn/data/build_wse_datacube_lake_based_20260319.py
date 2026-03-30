@@ -233,6 +233,10 @@ if __name__ == "__main__":
     lake_ids = load_lake_ids_from_graph(LAKE_GRAPH_CSV)
     print(f"  Found {len(lake_ids)} lakes in GRIT PLD lake graph.")
 
+    lake_graph_save_path = SAVE_DIR / LAKE_GRAPH_CSV.name
+    pd.read_csv(LAKE_GRAPH_CSV).to_csv(lake_graph_save_path, index=False)
+    print(f"Lake graph CSV saved → {lake_graph_save_path}")
+
     start_date = pd.Timestamp(START_MONTH + "-01")
     end_date   = pd.Timestamp(END_MONTH   + "-01") + pd.offsets.MonthEnd(0)
     all_dates = pd.date_range(start_date, end_date, freq="D")

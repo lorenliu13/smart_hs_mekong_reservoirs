@@ -27,7 +27,7 @@ module load Anaconda3
 conda activate $DATA/py311_torch
 
 # ── Shared paths ───────────────────────────────────────────────────────────────
-TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/training_data_lake_based_great_mekong_20260325"
+TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc"
 
 WSE_DATACUBE="$TRAINING_FOLDER/swot_lake_wse_datacube_wse_norm.nc"
 ERA5_DATACUBE="$TRAINING_FOLDER/swot_lake_era5_climate_datacube.nc"
@@ -37,7 +37,7 @@ WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
 LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
-RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202512_v01"
+RUN_NAME="exp01_mekong_wse1d_era5_ifshres_gritv06_202312_202602_v01"
 
 # ── Training ───────────────────────────────────────────────────────────────────
 python run_lake_exp01.py \
