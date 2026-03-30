@@ -1,9 +1,12 @@
 """
 Aggregate ECMWF IFS HRES 6-hourly GRIB2 files to daily gridded NetCDF.
+For data from 2026 onward, all variables are stored in a single combined
+GRIB2 file per month:
 
-For each monthly GRIB2 file, reads all forecast initialisation dates,
-applies the appropriate daily aggregation, and writes one NetCDF file per
-variable per month:
+    hres_mekong_<YYYY-MM>_all.grib2
+
+Each variable is extracted individually, aggregated to daily values, and
+written as a separate NetCDF file per variable per month:
 
     hres_mekong_<YYYY-MM>_<var>_daily.nc
 
@@ -31,13 +34,13 @@ Valid-date convention
       init_date + (d-1)*24 h  →  init_date + d*24 h
   which corresponds to calendar date  valid_date = init_date + (d-1) days.
 
-  Example (init_date = 2024-01-14):
-      d=1: step 0→24 h  →  rain on 2024-01-14  →  valid_date 2024-01-14
-      d=2: step 24→48 h →  rain on 2024-01-15  →  valid_date 2024-01-15
+  Example (init_date = 2026-01-14):
+      d=1: step 0→24 h  →  rain on 2026-01-14  →  valid_date 2026-01-14
+      d=2: step 24→48 h →  rain on 2026-01-15  →  valid_date 2026-01-15
 
 Usage
 -----
-  python aggregate_ecmwf_to_daily.py
+  python aggregate_ecmwf_to_daily_cluster_allinone.py
 
 Dependencies
 ------------
@@ -70,7 +73,7 @@ END_YEAR    = 2026
 END_MONTH   = 2
 N_DAYS      = 10      # forecast days to retain per init date
 OVERWRITE   = True
-N_WORKERS   = 20       # parallel worker processes (one per variable×month task)
+N_WORKERS   = 20      # parallel worker processes (one per variable×month task)
 
 # ---------------------------------------------------------------------------
 # Variable metadata:  short_name → (col_name, agg_type, units)
@@ -81,12 +84,12 @@ N_WORKERS   = 20       # parallel worker processes (one per variable×month task
 # units     : physical units of the variable as stored in GRIB2
 # ---------------------------------------------------------------------------
 VAR_META = {
-    "tp"   : ("tp",   "accum", "m"),        # total precipitation (accumulated)
-    "2t"   : ("t2m",  "inst",  "K"),        # 2-metre air temperature
-    "2d"   : ("d2m",  "inst",  "K"),        # 2-metre dewpoint temperature
-    "sp"   : ("sp",   "inst",  "Pa"),       # surface pressure
-    "10u"  : ("u10",  "inst",  "m/s"),      # 10-metre U (eastward) wind
-    "10v"  : ("v10",  "inst",  "m/s"),      # 10-metre V (northward) wind
+    "tp"   : ("tp",    "accum", "m"),        # total precipitation (accumulated)
+    "2t"   : ("t2m",   "inst",  "K"),        # 2-metre air temperature
+    "2d"   : ("d2m",   "inst",  "K"),        # 2-metre dewpoint temperature
+    "sp"   : ("sp",    "inst",  "Pa"),       # surface pressure
+    "10u"  : ("u10",   "inst",  "m/s"),      # 10-metre U (eastward) wind
+    "10v"  : ("v10",   "inst",  "m/s"),      # 10-metre V (northward) wind
     "ssrd" : ("ssrd",  "accum", "J m-2"),    # surface solar radiation downwards (accumulated)
     "strd" : ("strd",  "accum", "J m-2"),    # surface thermal radiation downwards (accumulated)
     "sf"   : ("sf",    "accum", "m"),        # snowfall (accumulated)
@@ -108,14 +111,14 @@ LONG_NAMES = {
     "sp"   : "Surface pressure",
     "u10"  : "10-metre U wind component",
     "v10"  : "10-metre V wind component",
-    "ssrd"  : "Surface solar radiation downwards",
-    "strd"  : "Surface thermal radiation downwards",
-    "sf"    : "Snowfall",
-    "sd"    : "Snow depth",
-    "swvl1" : "Volumetric soil water layer 1",
-    "swvl2" : "Volumetric soil water layer 2",
-    "swvl3" : "Volumetric soil water layer 3",
-    "swvl4" : "Volumetric soil water layer 4",
+    "ssrd" : "Surface solar radiation downwards",
+    "strd" : "Surface thermal radiation downwards",
+    "sf"   : "Snowfall",
+    "sd"   : "Snow depth",
+    "swvl1": "Volumetric soil water layer 1",
+    "swvl2": "Volumetric soil water layer 2",
+    "swvl3": "Volumetric soil water layer 3",
+    "swvl4": "Volumetric soil water layer 4",
 }
 
 
@@ -143,30 +146,41 @@ def _suppress_fd2():
         os.close(saved)
 
 
-def grib_file_path(data_dir: Path, year: int, month: int, var: str) -> Path:
-    return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_{var}.grib2"
+def grib_file_path(data_dir: Path, year: int, month: int) -> Path:
+    """Return the path to the combined all-variables GRIB2 file for a given month."""
+    return data_dir / f"{year}-{month:02d}" / f"hres_mekong_{year}-{month:02d}_all.grib2"
 
 
-def load_grib_variable(grib_path: Path) -> xr.DataArray | None:
+def load_grib_variable(grib_path: Path, var: str) -> xr.DataArray | None:
     """
-    Load one variable from a GRIB2 file.
+    Load a single variable from a combined all-variables GRIB2 file.
 
-    cfgrib.open_datasets returns a list of xr.Dataset objects (one per GRIB
-    message type / type-of-level combination found in the file).  For the
-    single-variable per-file layout used here, the first dataset contains the
-    variable of interest.
+    Uses cfgrib's filter_by_keys to read only the GRIB messages matching the
+    requested ECMWF short name, avoiding loading all variables into memory.
+
+    Parameters
+    ----------
+    grib_path : path to the combined _all.grib2 file
+    var       : ECMWF short name to extract (e.g. "tp", "2t", "swvl1")
 
     Returns an xr.DataArray with dims (time, step, latitude, longitude),
-    or None if the file does not exist or cannot be read.
+    or None if the file does not exist, cannot be read, or the variable is
+    not found inside the file.
     """
     if not grib_path.exists():
         print(f"  [MISS] {grib_path.name}")
         return None
     try:
         with _suppress_fd2():
-            ds_list = cfgrib.open_datasets(str(grib_path))
+            ds_list = cfgrib.open_datasets(
+                str(grib_path),
+                filter_by_keys={"shortName": var},
+            )
+        if not ds_list:
+            print(f"  [EMPTY] {grib_path.name} (var={var})")
+            return None
         ds  = ds_list[0]
-        key = list(ds.data_vars)[0]   # first (and usually only) data variable = the ECMWF short name
+        key = list(ds.data_vars)[0]   # the filtered dataset contains only the requested variable
         da  = ds[key]
         # Files with a single init date may lack a 'time' dimension; add it so
         # downstream code can always index with da.isel(time=t_idx)
@@ -174,7 +188,7 @@ def load_grib_variable(grib_path: Path) -> xr.DataArray | None:
             da = da.expand_dims("time")
         return da
     except Exception as exc:
-        print(f"  [FAIL] {grib_path.name}: {exc}")
+        print(f"  [FAIL] {grib_path.name} (var={var}): {exc}")
         return None
 
 
@@ -278,9 +292,13 @@ def process_variable_month(
     overwrite: bool = False,
 ) -> None:
     """
-    Aggregate one ECMWF variable for one month to a daily NetCDF file.
+    Extract one variable from the combined _all.grib2 file, aggregate to
+    daily values, and write a per-variable NetCDF file.
 
-    Output path:
+    Input:
+        <data_dir>/<YYYY-MM>/hres_mekong_<YYYY-MM>_all.grib2
+
+    Output:
         <output_dir>/<YYYY-MM>/hres_mekong_<YYYY-MM>_<col_name>_daily.nc
     """
     month_str = f"{year}-{month:02d}"
@@ -292,8 +310,8 @@ def process_variable_month(
         print(f"  {col_name:6s}  {month_str}: skipped (already exists)")
         return
 
-    grib_path = grib_file_path(data_dir, year, month, var)
-    da = load_grib_variable(grib_path)
+    grib_path = grib_file_path(data_dir, year, month)
+    da = load_grib_variable(grib_path, var)
     if da is None:
         return
 
@@ -345,8 +363,8 @@ def process_variable_month(
                 stacked_data,
                 dims=["init_time", "forecast_day", "latitude", "longitude"],
                 attrs={
-                    "units"    : units,
-                    "long_name": LONG_NAMES.get(col_name, col_name),
+                    "units"      : units,
+                    "long_name"  : LONG_NAMES.get(col_name, col_name),
                     "aggregation": (
                         "step-difference (field[d*24h] - field[(d-1)*24h])"
                         if var in ACCUM_VARS else
@@ -375,7 +393,7 @@ def process_variable_month(
             "valid_time = init_time + (forecast_day - 1) days; "
             "day 1 covers T+0 … T+24 h = the init calendar date"
         ),
-        "created_by" : "aggregate_ecmwf_to_daily.py",
+        "created_by" : "aggregate_ecmwf_to_daily_cluster_allinone.py",
     }
 
     ds.to_netcdf(out_nc)
@@ -394,7 +412,9 @@ def _worker(args: tuple) -> None:
 # ===========================================================================
 
 def main() -> None:
-    # Build the full list of (variable × month) tasks to process
+    # Build the full list of (variable × month) tasks to process.
+    # Each task reads from the same _all.grib2 file but extracts a different
+    # variable and writes an independent output NetCDF.
     tasks = []
     for var, (col_name, _agg, units) in VAR_META.items():
         for year in range(START_YEAR, END_YEAR + 1):
@@ -408,11 +428,13 @@ def main() -> None:
                 ))
 
     print(f"Dispatching {len(tasks)} task(s) across {N_WORKERS} worker(s) …")
-    print(f"Output root: {OUTPUT_DIR}\n")
+    print(f"Input format : hres_mekong_<YYYY-MM>_all.grib2  (all variables combined)")
+    print(f"Output root  : {OUTPUT_DIR}\n")
 
     # Process all tasks in parallel using a multiprocessing pool.
-    # Each worker handles one (variable, month) combination independently,
-    # so there are no shared data structures between workers.
+    # Each worker handles one (variable, month) combination independently.
+    # Multiple workers may read the same _all.grib2 file concurrently, but
+    # each opens it independently (read-only), so there are no conflicts.
     with Pool(processes=N_WORKERS) as pool:
         pool.map(_worker, tasks)
 
