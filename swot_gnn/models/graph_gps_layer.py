@@ -30,7 +30,7 @@ class GraphGPSLayer(nn.Module):
         in_dim: int,
         out_dim: int,
         heads: int = 4,
-        dropout: float = 0.5,
+        dropout: float = 0.1,
         use_linear_attn: bool = True,
     ):
         super().__init__()

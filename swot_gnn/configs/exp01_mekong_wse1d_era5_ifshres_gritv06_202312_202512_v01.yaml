@@ -21,16 +21,12 @@
 # Loss:   ObservedMSELoss — MSE averaged only over lakes with a SWOT observation
 #         on the forecast date (label_mask=1).
 #
-# NOTE:   static_dim is auto-detected at runtime from swot_lake_static_datacube.nc
-#         and overrides the placeholder value below before the model is built.
-
 seed: 42          # random seed — override with --seed on the CLI
 
 model:
   swot_dim: 8              # obs_mask, latest_wse, latest_wse_u, latest_wse_std,
                             # latest_area_total, days_since_last_obs, doy_sin, doy_cos
   climate_dim: 13          # LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd, swvl1-4
-  static_dim: 1            # placeholder — overridden at runtime from static datacube
   static_embed_dim: 16
   embed_dim: 64
   hidden_dim: 64

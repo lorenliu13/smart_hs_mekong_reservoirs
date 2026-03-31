@@ -3,6 +3,7 @@ Training loop for SWOT-GNN.
 """
 import torch
 import torch.nn as nn
+from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 import numpy as np
@@ -56,6 +57,7 @@ def _compute_loader_loss(loader: DataLoader, model: nn.Module, criterion: nn.Mod
 
     Runs in eval mode with no_grad to save memory.  Iterates every sample
     in every batch and accumulates the per-sample loss, then returns the mean.
+    Uses autocast for float16 inference (matches training precision).
     """
     model.eval()
     total_loss = 0.0
@@ -88,10 +90,11 @@ def _compute_loader_loss(loader: DataLoader, model: nn.Module, criterion: nn.Mod
                 lab = labels[b].to(device)             # (n_seg,) — target WSE
                 msk = masks[b].to(device)              # (n_seg,) — observation mask
 
-                # Forward pass; ForecastHead already extracts the last time step
+                # Forward pass in float16; ForecastHead already extracts the last time step
                 # pred shape: (n_seg,) — 1-day-ahead WSE per node
-                pred = model(x, edge_index, static_features=static)
-                loss = criterion(pred, lab, msk)
+                with autocast(device_type=device.type):
+                    pred = model(x, edge_index, static_features=static)
+                    loss = criterion(pred, lab, msk)
                 total_loss += loss.item()
             n_batches += batch_size
 
@@ -139,6 +142,11 @@ def train_swot_gnn(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-5
     )
     criterion = ObservedMSELoss()
+    # GradScaler prevents float16 gradient underflow by scaling loss up before
+    # backward and scaling gradients back down before the optimizer step.
+    # Disabled automatically when device is CPU (float16 not accelerated on CPU).
+    use_amp = device.type == "cuda"
+    grad_scaler = GradScaler(enabled=use_amp)
 
     train_losses = []   # per-epoch average training loss
     val_losses = []     # per-epoch average validation loss (empty if no val_loader)
@@ -183,23 +191,24 @@ def train_swot_gnn(
                 lab = labels[b].to(device)
                 msk = masks[b].to(device)
 
-                # Forward pass; ForecastHead inside the model extracts the last
-                # time step and projects it to a scalar — pred shape: (n_seg,)
-                pred = model(x, edge_index, static_features=static)
+                # Forward pass in float16; ForecastHead extracts the last time step
+                # and projects it to a scalar — pred shape: (n_seg,)
+                with autocast(device_type=device.type, enabled=use_amp):
+                    pred = model(x, edge_index, static_features=static)
+                    loss = criterion(pred, lab, msk)
 
-                loss = criterion(pred, lab, msk)
-                # Divide by batch_size so the accumulated gradient has the same
-                # scale as a single averaged loss over the batch
-                (loss / batch_size).backward()
-                # Gradients from all samples in the batch are accumulated via repeated backward() calls
-                # before the single optimizer.step()
-                # This is standard gradient accumulation. 
+                # Scale loss to prevent float16 gradient underflow, then accumulate.
+                # Divide by batch_size so gradient scale matches a single averaged loss.
+                grad_scaler.scale(loss / batch_size).backward()
                 batch_loss += loss.item()
 
-            # Clip gradients before stepping to prevent LSTM gradient explosion
+            # Unscale before clipping so the clip threshold is in true gradient units,
+            # then step (skipped automatically if gradients contain inf/nan from overflow).
             if grad_clip > 0:
+                grad_scaler.unscale_(optimizer)
                 nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
 
             epoch_loss += batch_loss
             n_batches += batch_size

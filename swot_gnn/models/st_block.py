@@ -3,8 +3,8 @@ ST-Block: Spatio-Temporal block for SWOT-GNN.
 Processes (1) Temporal: bi-LSTM over time per node, (2) Spatial: GraphGPS over graph per timestep.
 Order: temporal first, then spatial at each timestep.
 
-Static features are concatenated as input features to both the bi-LSTM (every timestep)
-and the GraphGPS (every timestep, projected back to hidden_dim before the GPS stack).
+Static features are concatenated as input features to the bi-LSTM (every timestep).
+The GraphGPS stack receives only the LSTM hidden states.
 """
 import torch
 import torch.nn as nn
@@ -19,9 +19,8 @@ class STBlock(nn.Module):
     Each node gets a temporal sequence -> LSTM encodes it -> GraphGPS propagates across graph
     at each timestep. Output is full (num_nodes, seq_len, hidden_dim) for next block.
 
-    Static features (time-invariant node attributes) are injected as input features:
-    - LSTM: static embedding concatenated to x at every timestep
-    - GPS:  static embedding concatenated to ht at every timestep, then projected to hidden_dim
+    Static features (time-invariant node attributes) are concatenated to x before the LSTM only.
+    The GraphGPS stack receives only the LSTM hidden states.
     """
 
     def __init__(
@@ -30,7 +29,7 @@ class STBlock(nn.Module):
         hidden_dim: int = 32,
         gps_layers: int = 3,
         gps_heads: int = 4,
-        dropout: float = 0.5,
+        dropout: float = 0.1,
         static_embed_dim: int = 0,
     ):
         super().__init__()
@@ -46,9 +45,6 @@ class STBlock(nn.Module):
             dropout=dropout,
         )
         self.lstm_dropout = nn.Dropout(dropout)
-        # Projection to merge static into node hidden state before GPS stack (per timestep)
-        if static_embed_dim > 0:
-            self.static_gps_proj = nn.Linear(hidden_dim + static_embed_dim, hidden_dim)
         # GraphGPS stack: applied per timestep to mix info across the river network
         self.gps_stack = nn.ModuleList([
             GraphGPSLayer(
@@ -74,7 +70,7 @@ class STBlock(nn.Module):
             edge_index: (2, num_edges)
             batch: Optional batch vector
             static: (num_nodes, static_embed_dim) - static node embedding, concatenated as
-                input features to both the LSTM and GPS at every timestep.
+                input features to the LSTM at every timestep.
         Returns:
             (num_nodes, seq_len, hidden_dim) - full temporal sequence for next ST-block
         """
@@ -91,14 +87,12 @@ class STBlock(nn.Module):
         lstm_out = self.lstm_dropout(lstm_out)
         h = self.norm(lstm_out)
 
-        # Step 2: Spatial - at each timestep t, inject static then run GraphGPS across graph.
+        # Step 2: Spatial - at each timestep t, run GraphGPS across graph.
         # GraphGPS mixes information across the river network at each snapshot in time,
         # letting upstream/downstream context flow between nodes.
         out_list = []
         for t in range(seq_len):
             ht = h[:, t, :]  # (num_nodes, hidden_dim)
-            if static is not None and self.static_embed_dim > 0:
-                ht = self.static_gps_proj(torch.cat([ht, static], dim=-1))  # (num_nodes, hidden_dim)
             for gps in self.gps_stack:
                 ht = gps(ht, edge_index, batch) + ht  # Residual connection
             out_list.append(ht)
