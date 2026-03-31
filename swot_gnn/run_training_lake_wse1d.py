@@ -46,18 +46,24 @@ from training.train import ObservedMSELoss
 
 # ── Training helpers ───────────────────────────────────────────────────────────
 
-def _run_epoch(model, loader, criterion, device, optimizer=None, grad_clip=1.0):
+def _run_epoch(model, loader, criterion, device, optimizer=None, grad_clip=1.0,
+               scaler=None):
     """
     Run one forward pass over `loader`.
 
     When `optimizer` is provided (training mode) the function back-propagates
     and steps the optimiser.  Without it the function runs in eval / no-grad mode.
 
+    All samples in a batch are stacked into a single forward pass (one call to model
+    instead of `batch_size` calls), with edge_index replicated and offset per sample.
+    Mixed-precision (AMP) is used when `scaler` is provided (CUDA only).
+
     Returns the mean per-sample loss over the full loader.
     """
     is_train = optimizer is not None
     model.train(is_train)
     ctx = torch.enable_grad() if is_train else torch.no_grad()
+    use_amp = scaler is not None
 
     total_loss, n_samples = 0.0, 0
     with ctx:
@@ -66,30 +72,50 @@ def _run_epoch(model, loader, criterion, device, optimizer=None, grad_clip=1.0):
             if is_train:
                 optimizer.zero_grad()
 
-            batch_loss = 0.0
-            for b in range(bs):
-                # Stack per-timestep node feature matrices → (n_lakes, T, n_feat)
-                x = torch.stack([d.x for d in data_lists[b]], dim=1).to(device)
-                edge_index = data_lists[b][0].edge_index.to(device)
-                static = static_feats[b].to(device)      # (n_lakes, static_dim)
+            # --- Build a single batched forward pass for all bs samples --------
+            # All samples share the same graph topology — replicate edge_index
+            # with per-sample node-index offsets so GNN layers see bs disjoint graphs.
 
-                # Labels/mask: (n_lakes, 1) for forecast_horizon=1 → squeeze to (n_lakes,)
-                lab = labels[b].squeeze(-1).to(device)   # (n_lakes,)
-                msk = masks[b].squeeze(-1).to(device)    # (n_lakes,)
+            # x: stack (n_lakes, T, n_feat) per sample → (bs, n_lakes, T, n_feat)
+            x_all = torch.stack(
+                [torch.stack([d.x for d in data_lists[b]], dim=1) for b in range(bs)]
+            ).to(device)                                      # (B, n, T, F)
+            B, n, T, F = x_all.shape
+            x_flat = x_all.view(B * n, T, F)                 # (B*n, T, F)
 
-                # Forward pass — ForecastHead returns (n_lakes,) when horizon=1
-                pred = model(x, edge_index, static_features=static)
+            # edge_index: same topology for every sample; offset by n per sample
+            ei_base = data_lists[0][0].edge_index.to(device) # (2, e)
+            offsets  = (torch.arange(B, device=device) * n).view(B, 1, 1)
+            ei_batched = (ei_base.unsqueeze(0) + offsets).permute(1, 0, 2).reshape(2, -1)
 
-                loss = criterion(pred, lab, msk)
-                if is_train:
-                    (loss / bs).backward()
-                batch_loss += loss.item()
+            # static: (B, n, static_dim) → (B*n, static_dim)
+            static_flat = static_feats.view(B * n, -1).to(device)
+
+            # labels/masks: (B, n, horizon) → (B*n, horizon) → squeeze for horizon=1
+            lab_flat = labels.view(B * n, -1).squeeze(-1).to(device)   # (B*n,)
+            msk_flat = masks.view(B * n, -1).squeeze(-1).to(device)    # (B*n,)
+
+            # batch vector for global attention: group nodes by sample
+            batch_vec = torch.arange(B, device=device).repeat_interleave(n)
+
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                pred = model(x_flat, ei_batched, static_features=static_flat,
+                             batch=batch_vec)
+                loss = criterion(pred, lab_flat, msk_flat)
 
             if is_train:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                optimizer.step()
+                if use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                    optimizer.step()
 
-            total_loss += batch_loss
+            total_loss += loss.item() * bs   # rescale back to sum-over-samples
             n_samples  += bs
 
     return total_loss / max(n_samples, 1)
@@ -128,9 +154,15 @@ def train(cfg, args):
     print(f"Static features: {static_dim} attributes per lake (auto-detected)")
 
     # ── DataLoaders ─────────────────────────────────────────────────────────
+    # num_workers>0 overlaps data loading with GPU compute; pin_memory speeds
+    # host→device transfers; persistent_workers avoids worker restart overhead.
+    num_workers = cfg["training"].get("num_workers", 4)
     loader_kwargs = dict(
-        batch_size = cfg["training"]["batch_size"],
-        collate_fn = collate_temporal_graph_batch_lake,
+        batch_size       = cfg["training"]["batch_size"],
+        collate_fn       = collate_temporal_graph_batch_lake,
+        num_workers      = num_workers,
+        pin_memory       = device.type == "cuda",
+        persistent_workers = num_workers > 0,
     )
     train_loader = torch.utils.data.DataLoader(train_ds, shuffle=True,  **loader_kwargs)
     val_loader   = torch.utils.data.DataLoader(val_ds,   shuffle=False, **loader_kwargs)
@@ -142,6 +174,8 @@ def train(cfg, args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-5
     )
+    # AMP GradScaler — active only on CUDA; no-op on CPU (enabled=False)
+    scaler    = torch.amp.GradScaler(enabled=device.type == "cuda")
     grad_clip = cfg["training"].get("grad_clip", 1.0)
     patience  = cfg["training"].get("patience", 20)
 
@@ -169,7 +203,7 @@ def train(cfg, args):
     for epoch in range(cfg["training"]["num_epochs"]):
         epoch_start = time.time()
         avg_train = _run_epoch(model, train_loader, criterion, device,
-                               optimizer=optimizer, grad_clip=grad_clip)
+                               optimizer=optimizer, grad_clip=grad_clip, scaler=scaler)
         avg_val   = _run_epoch(model, val_loader,   criterion, device)
         epoch_secs = time.time() - epoch_start
 
