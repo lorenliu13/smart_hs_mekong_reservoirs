@@ -51,119 +51,51 @@ class ObservedMSELoss(nn.Module):
         return masked_loss.sum() / (mask.sum() + 1e-8)  # mean over observed nodes
 
 
-def _build_batched_inputs(data_lists, static_feats, labels, masks, device):
-    """Stack all samples in a collated batch into a single set of tensors for one forward pass.
-
-    WHY: Running the model once on a large tensor is much faster than running it B times
-    on small tensors, because each model call has overhead (kernel launches, memory
-    allocation) and small tensors leave the GPU underutilised.
-
-    HOW — the graph batching trick:
-    All samples share the same graph topology (same lakes, same edges).  We stack their
-    node features into one long tensor and replicate edge_index B times, each copy shifted
-    by `n` (the number of nodes per graph).  The result is B disjoint sub-graphs sitting
-    inside one big disconnected graph — the standard PyG mini-batch format.
-
-    Example with B=2 samples, n=3 nodes, e=2 edges:
-        Sample 0 nodes: [0, 1, 2]      edge_index: [[0,1],[1,2]]
-        Sample 1 nodes: [3, 4, 5]      edge_index: [[3,4],[4,5]]  ← original + n
-        Combined nodes: [0,1,2, 3,4,5] edge_index: [[0,1,3,4],[1,2,4,5]]  shape (2, B*e)
-
-    Returns:
-        x_flat      : (B*n, T, n_feat)  — node features for all samples
-        ei_batched  : (2, B*e)          — B offset copies of the base edge_index
-        static_flat : (B*n, static_dim) — static attributes for all nodes
-        lab_flat    : (B*n,)            — target WSE labels (horizon=1) or (B*n, horizon)
-        msk_flat    : (B*n,)            — observation mask matching lab_flat
-        batch_vec   : (B*n,)            — integer in [0, B) mapping each node to its sample;
-                                          used by STBlock to keep GPS attention within samples
-    """
-    bs = len(data_lists)
-
-    # ── Node features ────────────────────────────────────────────────────────────
-    # Each sample is a list of T PyG Data objects (one graph snapshot per day).
-    # Stack the per-day node feature matrices along a new time dimension to get
-    # (n, T, n_feat), then stack across samples to get (B, n, T, n_feat).
-    def _to_x(sample):
-        if isinstance(sample, list):
-            return torch.stack([d.x for d in sample], dim=1)   # (n, T, n_feat)
-        return sample.x.unsqueeze(1)                            # (n, 1, n_feat) when seq_len=1
-
-    x_all  = torch.stack([_to_x(data_lists[b]) for b in range(bs)]).to(device)
-    B, n, T, F = x_all.shape
-    x_flat = x_all.view(B * n, T, F)   # flatten B and n → (B*n, T, F)
-
-    # ── Edge index ───────────────────────────────────────────────────────────────
-    # All samples use the same lake graph, so the base edge_index is taken from
-    # sample 0.  We then create B copies, each shifted by n*b so that sample b's
-    # nodes start at index b*n — preventing any cross-sample edges.
-    sample0 = data_lists[0]
-    ei_base = (sample0[0].edge_index if isinstance(sample0, list) else sample0.edge_index).to(device)
-    # offsets shape: (B, 1, 1) so it broadcasts over (B, 2, e)
-    offsets    = (torch.arange(B, device=device) * n).view(B, 1, 1)
-    ei_batched = (ei_base.unsqueeze(0) + offsets).permute(1, 0, 2).reshape(2, -1)
-    # Result shape: (2, B*e) — B disjoint copies of the graph edge list
-
-    # ── Static features ──────────────────────────────────────────────────────────
-    # static_feats may arrive as a pre-stacked tensor (B, n, static_dim) from the
-    # lake collate_fn, or as a plain list when called from older code paths.
-    if isinstance(static_feats, torch.Tensor):
-        static_flat = static_feats.view(B * n, -1).to(device)      # (B*n, static_dim)
-    else:
-        static_flat = torch.stack([static_feats[b] for b in range(bs)]).view(B * n, -1).to(device)
-
-    # ── Labels and masks ─────────────────────────────────────────────────────────
-    # labels/masks may be (B, n, horizon) tensors or lists of (n,) tensors.
-    # squeeze(-1) collapses the horizon dimension when forecast_horizon=1 so the
-    # loss function receives a flat (B*n,) vector.
-    if isinstance(labels, torch.Tensor):
-        lab_flat = labels.view(B * n, -1).squeeze(-1).to(device)   # (B*n,) or (B*n, horizon)
-        msk_flat = masks.view(B * n, -1).squeeze(-1).to(device)
-    else:
-        lab_flat = torch.stack([labels[b] for b in range(bs)]).view(B * n, -1).squeeze(-1).to(device)
-        msk_flat = torch.stack([masks[b]  for b in range(bs)]).view(B * n, -1).squeeze(-1).to(device)
-
-    # ── Batch vector ─────────────────────────────────────────────────────────────
-    # batch_vec[i] = which sample node i belongs to.
-    # Example B=2, n=3: [0, 0, 0, 1, 1, 1]
-    # STBlock uses this to split nodes back into per-sample groups before the
-    # GPS timestep vectorisation, and GraphGPSLayer uses it so global attention
-    # does not mix nodes from different samples.
-    batch_vec = torch.arange(B, device=device).repeat_interleave(n)  # (B*n,)
-
-    return x_flat, ei_batched, static_flat, lab_flat, msk_flat, batch_vec
-
-
-def _compute_loader_loss(loader: DataLoader, model: nn.Module, criterion: nn.Module,
-                         device: torch.device) -> float:
+def _compute_loader_loss(loader: DataLoader, model: nn.Module, criterion: nn.Module, device: torch.device) -> float:
     """Compute average loss over an entire DataLoader (used for validation).
 
-    Runs in eval mode with no_grad to save memory.  Each collated batch is processed
-    in a single batched forward pass instead of sample-by-sample.
+    Runs in eval mode with no_grad to save memory.  Iterates every sample
+    in every batch and accumulates the per-sample loss, then returns the mean.
     """
     model.eval()
     total_loss = 0.0
-    n_samples = 0
+    n_batches = 0
     with torch.no_grad():
         for batch in loader:
+            # Unpack the 4-element tuple produced by collate_fn
             data_lists, static_feats, labels, masks = batch
             if not data_lists:
                 continue
 
-            # Build all tensors for a single batched forward pass
-            x_flat, ei_batched, static_flat, lab_flat, msk_flat, batch_vec = \
-                _build_batched_inputs(data_lists, static_feats, labels, masks, device)
+            batch_size = len(data_lists)
+            for b in range(batch_size):
+                sample = data_lists[b]
 
-            pred = model(x_flat, ei_batched, static_features=static_flat, batch=batch_vec)
-            loss = criterion(pred, lab_flat, msk_flat)
+                # sample is either a list of T PyG Data objects (one per time step)
+                # or a single Data object when seq_len == 1.
+                if isinstance(sample, list):
+                    # Stack node features across time: (n_seg, T, n_feat)
+                    x = torch.stack([d.x for d in sample], dim=1)
+                    # All time steps share the same graph topology
+                    edge_index = sample[0].edge_index
+                else:
+                    x = sample.x.unsqueeze(1)   # add time dimension: (n_seg, 1, n_feat)
+                    edge_index = sample.edge_index
 
-            bs = len(data_lists)
-            # loss is already averaged over observed nodes; multiply by bs so we
-            # can later divide by total n_samples to get a true per-sample mean.
-            total_loss += loss.item() * bs
-            n_samples  += bs
+                x = x.to(device)
+                edge_index = edge_index.to(device)
+                static = static_feats[b].to(device)   # (n_seg, static_dim)
+                lab = labels[b].to(device)             # (n_seg,) — target WSE
+                msk = masks[b].to(device)              # (n_seg,) — observation mask
 
-    return total_loss / max(n_samples, 1)
+                # Forward pass; ForecastHead already extracts the last time step
+                # pred shape: (n_seg,) — 1-day-ahead WSE per node
+                pred = model(x, edge_index, static_features=static)
+                loss = criterion(pred, lab, msk)
+                total_loss += loss.item()
+            n_batches += batch_size
+
+    return total_loss / max(n_batches, 1)
 
 
 def train_swot_gnn(
@@ -208,17 +140,6 @@ def train_swot_gnn(
     )
     criterion = ObservedMSELoss()
 
-    # ── Automatic Mixed Precision (AMP) ──────────────────────────────────────────
-    # On CUDA, AMP runs most ops in float16 (half precision), which halves memory
-    # bandwidth and uses Tensor Cores → roughly 1.5–2× faster with no code changes
-    # to the model.  On CPU, use_amp=False makes autocast and GradScaler no-ops so
-    # behaviour is identical to full float32 training.
-    use_amp    = device.type == "cuda"
-    amp_scaler = torch.amp.GradScaler(enabled=use_amp)
-    # GradScaler is needed because float16 has a small dynamic range: gradients
-    # can underflow to zero.  The scaler multiplies the loss by a large factor
-    # before backward(), then divides the gradients back before optimizer.step().
-
     train_losses = []   # per-epoch average training loss
     val_losses = []     # per-epoch average validation loss (empty if no val_loader)
     best_loss = float("inf")
@@ -229,61 +150,65 @@ def train_swot_gnn(
     for epoch in range(num_epochs):
         model.train()
         epoch_loss = 0.0
-        n_batches = 0
+        n_batches = 0   # counts individual samples, not batch groups
 
         for batch in train_loader:
             # Each batch is a tuple: (data_lists, static_feats, labels, masks)
+            # data_lists[b] — list of T PyG Data objects for sample b
+            # static_feats[b] — static node features tensor for sample b
+            # labels[b]       — target WSE at forecast day for sample b
+            # masks[b]        — observation mask at forecast day for sample b
             data_lists, static_feats, labels, masks = batch
             if not data_lists:
                 continue
 
-            bs = len(data_lists)
+            batch_size = len(data_lists)
+            # Accumulate gradients across all samples before stepping (true batch update)
             optimizer.zero_grad()
+            batch_loss = 0.0
+            for b in range(batch_size):
+                sample = data_lists[b]
 
-            # ── Build one big tensor for all B samples ────────────────────────
-            # Instead of looping over samples and calling model B times, we stack
-            # everything into (B*n, ...) tensors and run a single forward pass.
-            # See _build_batched_inputs for the graph-offset trick that keeps
-            # samples isolated from each other inside the shared edge_index.
-            x_flat, ei_batched, static_flat, lab_flat, msk_flat, batch_vec = \
-                _build_batched_inputs(data_lists, static_feats, labels, masks, device)
+                # Build the temporal node-feature tensor x: (n_seg, T, n_feat)
+                if isinstance(sample, list):
+                    x = torch.stack([d.x for d in sample], dim=1)
+                    edge_index = sample[0].edge_index
+                else:
+                    x = sample.x.unsqueeze(1)
+                    edge_index = sample.edge_index
 
-            # ── Forward pass under AMP ────────────────────────────────────────
-            # autocast selects float16 for matrix multiplies and convolutions
-            # but keeps sensitive ops (softmax, layer norm) in float32.
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                pred = model(x_flat, ei_batched, static_features=static_flat,
-                             batch=batch_vec)          # (B*n,) — WSE per node
-                loss = criterion(pred, lab_flat, msk_flat)
+                x = x.to(device)
+                edge_index = edge_index.to(device)
+                static = static_feats[b].to(device)
+                lab = labels[b].to(device)
+                msk = masks[b].to(device)
 
-            # ── Backward + gradient clip + optimizer step ─────────────────────
-            if use_amp:
-                # Scale loss up → backward (prevents float16 gradient underflow)
-                amp_scaler.scale(loss).backward()
-                # Unscale gradients back to true magnitudes before clipping
-                amp_scaler.unscale_(optimizer)
-                if grad_clip > 0:
-                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                # Step only if gradients are finite; otherwise skip and reduce scale
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
-            else:
-                loss.backward()
-                if grad_clip > 0:
-                    # Clip gradient norm to prevent LSTM exploding gradients
-                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                optimizer.step()
+                # Forward pass; ForecastHead inside the model extracts the last
+                # time step and projects it to a scalar — pred shape: (n_seg,)
+                pred = model(x, edge_index, static_features=static)
 
-            # Accumulate loss scaled back to a per-sample sum
-            epoch_loss += loss.item() * bs
-            n_batches  += bs
+                loss = criterion(pred, lab, msk)
+                # Divide by batch_size so the accumulated gradient has the same
+                # scale as a single averaged loss over the batch
+                (loss / batch_size).backward()
+                # Gradients from all samples in the batch are accumulated via repeated backward() calls
+                # before the single optimizer.step()
+                # This is standard gradient accumulation. 
+                batch_loss += loss.item()
+
+            # Clip gradients before stepping to prevent LSTM gradient explosion
+            if grad_clip > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+
+            epoch_loss += batch_loss
+            n_batches += batch_size
 
         avg_train = epoch_loss / max(n_batches, 1)
         train_losses.append(avg_train)
 
-        # ── Validation & model selection ──────────────────────────────────────
-        # Prefer validation loss for model selection when a val_loader is provided;
-        # fall back to training loss when running without a validation split.
+        # Decide which loss to use for model selection:
+        # prefer validation loss when a val_loader is provided.
         if val_loader is not None:
             avg_val = _compute_loader_loss(val_loader, model, criterion, device)
             val_losses.append(avg_val)
@@ -312,11 +237,8 @@ def train_swot_gnn(
         msg += f" | Best: {best_epoch+1} ({best_loss:.4f}) | LR: {current_lr:.2e}"
         print(msg)
 
-        # ── Early stopping ────────────────────────────────────────────────────
-        # Halt training when val loss has not improved for `patience` consecutive
-        # epochs — prevents overfitting and saves compute.
-        # Only active when a val_loader is provided; without one, train loss is a
-        # poor early-stopping signal (it will keep decreasing even while overfitting).
+        # Early stopping: halt when val loss has not improved for `patience` epochs.
+        # Only triggered when a val_loader is provided (watching val loss is meaningful).
         if val_loader is not None and epochs_without_improvement >= patience:
             print(f"Early stopping at epoch {epoch+1}: val loss did not improve for {patience} epochs.")
             stopped_early = True

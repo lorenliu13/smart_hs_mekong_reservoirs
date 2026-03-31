@@ -62,51 +62,32 @@ class GraphGPSLayer(nn.Module):
 
     def _global_attention(self, x: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Global attention over all nodes. Three modes:
-        - Batched (batch provided): vectorized FAVOR+ per graph-group via bmm — O(G·n·d²)
-          Nodes are assumed contiguous within each graph (guaranteed by our batching code).
-        - Large n (>256, no batch): FAVOR+ linear attention — O(n·d²)
-        - Small n (no batch): standard softmax attention — O(n²·d)
+        Global attention over all nodes. Two modes:
+        - Large n (>256): FAVOR+ linear attention for O(n) complexity (avoids n² softmax)
+        - Small n: Standard softmax attention
         """
         n = x.size(0)
         q = self.proj_q(x)
         k = self.proj_k(x)
         v = self.proj_v(x)
-        if batch is not None:
-            # Vectorized FAVOR+ across all graph groups — no Python loop.
-            # Nodes within each group are contiguous, so reshape is valid.
-            n_graphs = int(batch.max().item()) + 1
-            n_per = n // n_graphs          # nodes per group (uniform by construction)
-            scale = self.out_dim ** -0.25
-            q_f = (F.elu(q) + 1) * scale  # (N, d)
-            k_f = (F.elu(k) + 1) * scale  # (N, d)
-            # Reshape: (N, d) -> (G, n_per, d)
-            q3 = q_f.view(n_graphs, n_per, -1)
-            k3 = k_f.view(n_graphs, n_per, -1)
-            v3 = v.view(n_graphs, n_per, -1)
-            kv  = torch.bmm(k3.transpose(1, 2), v3)          # (G, d, d)
-            k_sum = k3.sum(dim=1)                              # (G, d)
-            denom = torch.bmm(q3, k_sum.unsqueeze(-1)) + 1e-8 # (G, n_per, 1)
-            out3  = torch.bmm(q3, kv) / denom                 # (G, n_per, d)
-            out   = out3.view(n, -1)                           # (N, d)
-        elif self.use_linear_attn and n > 256:
+        if self.use_linear_attn and n > 256:
             # FAVOR+ style: kernel feature map phi(x)=elu(x)+1 makes attention linearizable
             # out_i = sum_j phi(q_i)^T phi(k_j) v_j / sum_j phi(q_i)^T phi(k_j)
             # Implemented via: q @ (k^T @ v) / (q @ sum(k))
-            scale = self.out_dim ** -0.25
+            scale = (self.out_dim) ** -0.25
             q = F.elu(q) + 1
             k = F.elu(k) + 1
             q = q * scale
             k = k * scale
-            kv  = torch.einsum("nd,nv->dv", k, v)  # (out_dim, out_dim)
+            kv = torch.einsum("nd,nv->dv", k, v)  # (out_dim, out_dim)
             out = torch.einsum("nd,dv->nv", q, kv) / (torch.einsum("nd,d->n", q, k.sum(0)) + 1e-8).unsqueeze(-1)
         else:
             # Standard attention: softmax(QK^T / sqrt(d)) @ V
-            scale = self.out_dim ** -0.5
+            scale = (self.out_dim) ** -0.5
             attn = torch.mm(q, k.t()) * scale
             attn = F.softmax(attn, dim=-1)
             attn = F.dropout(attn, p=self.dropout, training=self.training)
-            out  = torch.mm(attn, v)
+            out = torch.mm(attn, v)
         return self.proj_out(out)
 
     def forward(
