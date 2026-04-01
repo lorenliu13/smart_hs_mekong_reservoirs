@@ -5,10 +5,14 @@ Exports:
     ObservedMSELoss          — masked MSE for 1-step forecasting
     ObservedMSELossMultiStep — masked MSE for multi-step forecasting
     ObservedGaussianNLLLoss  — masked Gaussian NLL for probabilistic forecasting
+    ObservedGaussianCRPSLoss — masked closed-form Gaussian CRPS for probabilistic forecasting
     _run_epoch               — one forward pass over a DataLoader (train or eval)
 """
+import math
+
 import torch
 import torch.nn as nn
+from torch.distributions import Normal
 from torch.utils.data import DataLoader
 
 
@@ -73,6 +77,51 @@ class ObservedGaussianNLLLoss(nn.Module):
         log_std = log_std.clamp(-6, 6)
         nll = 0.5 * (2 * log_std + ((target - mean) / log_std.exp()) ** 2)
         return (nll * mask).sum() / (mask.sum() + 1e-8)
+
+
+class ObservedGaussianCRPSLoss(nn.Module):
+    """Closed-form Gaussian CRPS loss, computed only at observed nodes (obs_mask=1).
+
+    For a Gaussian predictive distribution N(μ, σ²), CRPS has the closed form:
+        CRPS = σ · [z·(2Φ(z) − 1) + 2φ(z) − 1/√π]
+    where z = (target − mean) / σ, Φ = standard normal CDF, φ = standard normal PDF.
+
+    Compared with Gaussian NLL, CRPS is a proper scoring rule that is less sensitive
+    to extreme observations and penalises over-dispersed forecasts more gently.
+
+    Inputs:
+        mean:    (n_seg,) — predicted mean WSE (normalised)
+        log_std: (n_seg,) — predicted log standard deviation (normalised)
+        target:  (n_seg,) — ground-truth WSE (normalised)
+        mask:    (n_seg,) — 1 if observed, 0 if not
+
+    log_std is clamped to [-6, 6] to prevent numerical explosion.
+    """
+
+    _STANDARD_NORMAL = Normal(0.0, 1.0)
+    _INV_SQRT_PI = 1.0 / math.sqrt(math.pi)
+
+    def forward(
+        self,
+        mean:    torch.Tensor,  # (n_seg,)
+        log_std: torch.Tensor,  # (n_seg,)
+        target:  torch.Tensor,  # (n_seg,)
+        mask:    torch.Tensor,  # (n_seg,)
+    ) -> torch.Tensor:
+        log_std = log_std.clamp(-6, 6)
+        std = log_std.exp()
+        z   = (target - mean) / std
+
+        # Re-create standard normal on the correct device
+        standard_normal = Normal(
+            torch.zeros(1, device=mean.device),
+            torch.ones(1,  device=mean.device),
+        )
+        phi = standard_normal.log_prob(z).exp()   # φ(z)
+        Phi = standard_normal.cdf(z)              # Φ(z)
+
+        crps = std * (z * (2 * Phi - 1) + 2 * phi - self._INV_SQRT_PI)
+        return (crps * mask).sum() / (mask.sum() + 1e-8)
 
 
 def _run_epoch(

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.swot_gnn import SWOTGNN
 from models.swot_gnn_gauss import SWOTGNNGauss
-from training.train import ObservedMSELoss, ObservedGaussianNLLLoss
+from training.train import ObservedMSELoss, ObservedGaussianNLLLoss, ObservedGaussianCRPSLoss
 
 
 @dataclass
@@ -46,5 +46,11 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         loss_cls=ObservedGaussianNLLLoss,
         output_mode="gaussian",
         slug="swotgnn_gauss",
+    ),
+    "SWOTGNNGaussCRPS": ModelSpec(
+        model_cls=SWOTGNNGauss,
+        loss_cls=ObservedGaussianCRPSLoss,
+        output_mode="gaussian",
+        slug="swotgnn_gauss_crps",
     ),
 }

@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from scipy import stats as scipy_stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -52,6 +53,50 @@ def nse(obs, pred):
     if denom == 0:
         return 1.0 if np.allclose(obs, pred) else np.nan
     return 1 - np.sum((obs - pred) ** 2) / denom
+
+
+def crps_gaussian(obs, mu, sigma):
+    """
+    Analytical CRPS for Gaussian predictive distribution.
+
+    CRPS(N(μ,σ), y) = σ * [z*(2Φ(z)-1) + 2φ(z) - 1/√π]
+    where z = (y - μ) / σ.
+    Lower is better; equals MAE when σ→0.
+    """
+    obs, mu, sigma = np.array(obs), np.array(mu), np.array(sigma)
+    ok = ~(np.isnan(obs) | np.isnan(mu) | np.isnan(sigma) | (sigma <= 0))
+    if ok.sum() == 0:
+        return np.nan
+    z    = (obs[ok] - mu[ok]) / sigma[ok]
+    crps = sigma[ok] * (z * (2 * scipy_stats.norm.cdf(z) - 1)
+                        + 2 * scipy_stats.norm.pdf(z)
+                        - 1.0 / np.sqrt(np.pi))
+    return float(np.mean(crps))
+
+
+def pi_coverage(obs, mu, sigma, alpha=0.90):
+    """
+    Fraction of observations inside the (1-alpha) central prediction interval.
+    E.g. alpha=0.90 → 90% PI: μ ± 1.645σ.
+    """
+    obs, mu, sigma = np.array(obs), np.array(mu), np.array(sigma)
+    ok = ~(np.isnan(obs) | np.isnan(mu) | np.isnan(sigma) | (sigma <= 0))
+    if ok.sum() == 0:
+        return np.nan
+    z_crit = scipy_stats.norm.ppf(0.5 + alpha / 2)   # e.g. 1.645 for 90%
+    inside = (obs[ok] >= mu[ok] - z_crit * sigma[ok]) & \
+             (obs[ok] <= mu[ok] + z_crit * sigma[ok])
+    return float(inside.mean())
+
+
+def pi_width(sigma, alpha=0.90):
+    """Mean width of the (1-alpha) central prediction interval: 2 * z_crit * σ."""
+    sigma = np.array(sigma)
+    ok    = ~(np.isnan(sigma) | (sigma <= 0))
+    if ok.sum() == 0:
+        return np.nan
+    z_crit = scipy_stats.norm.ppf(0.5 + alpha / 2)
+    return float(np.mean(2 * z_crit * sigma[ok]))
 
 
 def residual_autocorr_lag1(obs, pred, dates=None):
@@ -158,7 +203,17 @@ def run_inference(ds, model, device, split_name=''):
 
 
 def compute_lake_metrics(test_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-lake metrics (physical units) on the test split."""
+    """
+    Compute per-lake metrics (physical units) on the test split.
+
+    For deterministic models, NSE/KGE/RMSE/MAE are computed on the predicted mean.
+    For probabilistic models (pred_std_m present and finite), additional metrics are
+    computed:
+      - crps_m   : mean CRPS (proper scoring rule; lower = better)
+      - cov90    : empirical 90% PI coverage (ideal = 0.90)
+      - piw90_m  : mean 90% PI width in metres (lower = sharper)
+    """
+    has_std = "pred_std_m" in test_df.columns
     lake_rows = []
     for lake_id, sub in test_df.groupby('lake_id'):
         sub = sub.sort_values('forecast_date')
@@ -167,7 +222,7 @@ def compute_lake_metrics(test_df: pd.DataFrame) -> pd.DataFrame:
         obs  = sub['target_m'].values
         pred = sub['pred_m'].values
         mse  = float(np.mean((obs - pred) ** 2))
-        lake_rows.append({
+        row = {
             'lake_id' : lake_id,
             'n_obs'   : len(sub),
             'mse_m2'  : mse,
@@ -176,7 +231,13 @@ def compute_lake_metrics(test_df: pd.DataFrame) -> pd.DataFrame:
             'nse'     : nse(obs, pred),
             'kge'     : compute_kge(obs, pred),
             'autocorr': residual_autocorr_lag1(obs, pred, sub['forecast_date'].values),
-        })
+        }
+        if has_std:
+            sigma = sub['pred_std_m'].values
+            row['crps_m']  = crps_gaussian(obs, pred, sigma)
+            row['cov90']   = pi_coverage(obs, pred, sigma, alpha=0.90)
+            row['piw90_m'] = pi_width(sigma, alpha=0.90)
+        lake_rows.append(row)
     return pd.DataFrame(lake_rows)
 
 
@@ -309,7 +370,9 @@ def main():
     print(f'  -> {run_dir}/lake_metrics_test.csv')
 
     # ── Median summary with 5th-95th percentile CI ────────────────────────────
-    metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr']
+    metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr',
+                   'crps_m', 'cov90', 'piw90_m']
+    metric_cols = [c for c in metric_cols if c in lake_metrics_df.columns]
     print('\n=== Median Per-Lake Metrics (5th-95th CI) ===')
     for col in metric_cols:
         med = lake_metrics_df[col].median()
