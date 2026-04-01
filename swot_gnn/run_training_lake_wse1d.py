@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-import torch.nn as nn
+from torch.amp import GradScaler
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -41,58 +41,7 @@ from data.temporal_graph_dataset_lake import (
     collate_temporal_graph_batch_lake,
 )
 from models.swot_gnn import SWOTGNN
-from training.train import ObservedMSELoss
-
-
-# ── Training helpers ───────────────────────────────────────────────────────────
-
-def _run_epoch(model, loader, criterion, device, optimizer=None, grad_clip=1.0):
-    """
-    Run one forward pass over `loader`.
-
-    When `optimizer` is provided (training mode) the function back-propagates
-    and steps the optimiser.  Without it the function runs in eval / no-grad mode.
-
-    Returns the mean per-sample loss over the full loader.
-    """
-    is_train = optimizer is not None
-    model.train(is_train)
-    ctx = torch.enable_grad() if is_train else torch.no_grad()
-
-    total_loss, n_samples = 0.0, 0
-    with ctx:
-        for data_lists, static_feats, labels, masks in loader:
-            bs = len(data_lists)
-            if is_train:
-                optimizer.zero_grad()
-
-            batch_loss = 0.0
-            for b in range(bs):
-                # Stack per-timestep node feature matrices → (n_lakes, T, n_feat)
-                x = torch.stack([d.x for d in data_lists[b]], dim=1).to(device)
-                edge_index = data_lists[b][0].edge_index.to(device)
-                static = static_feats[b].to(device)      # (n_lakes, static_dim)
-
-                # Labels/mask: (n_lakes, 1) for forecast_horizon=1 → squeeze to (n_lakes,)
-                lab = labels[b].squeeze(-1).to(device)   # (n_lakes,)
-                msk = masks[b].squeeze(-1).to(device)    # (n_lakes,)
-
-                # Forward pass — ForecastHead returns (n_lakes,) when horizon=1
-                pred = model(x, edge_index, static_features=static)
-
-                loss = criterion(pred, lab, msk)
-                if is_train:
-                    (loss / bs).backward()
-                batch_loss += loss.item()
-
-            if is_train:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                optimizer.step()
-
-            total_loss += batch_loss
-            n_samples  += bs
-
-    return total_loss / max(n_samples, 1)
+from training.train import ObservedMSELoss, _run_epoch
 
 
 # ── Main training routine ──────────────────────────────────────────────────────
@@ -142,6 +91,8 @@ def train(cfg, args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-5
     )
+    # GradScaler prevents float16 gradient underflow; disabled automatically on CPU
+    scaler    = GradScaler(enabled=device.type == "cuda")
     grad_clip = cfg["training"].get("grad_clip", 1.0)
     patience  = cfg["training"].get("patience", 20)
 
@@ -169,7 +120,7 @@ def train(cfg, args):
     for epoch in range(cfg["training"]["num_epochs"]):
         epoch_start = time.time()
         avg_train = _run_epoch(model, train_loader, criterion, device,
-                               optimizer=optimizer, grad_clip=grad_clip)
+                               optimizer=optimizer, scaler=scaler, grad_clip=grad_clip)
         avg_val   = _run_epoch(model, val_loader,   criterion, device)
         epoch_secs = time.time() - epoch_start
 

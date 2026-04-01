@@ -62,15 +62,41 @@ class GraphGPSLayer(nn.Module):
 
     def _global_attention(self, x: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Global attention over all nodes. Two modes:
-        - Large n (>256): FAVOR+ linear attention for O(n) complexity (avoids n² softmax)
-        - Small n: Standard softmax attention
+        Global attention over all nodes. Three modes:
+        - Batched (batch vector provided): B independent attention operations, one per sample.
+          Prevents nodes from one sample attending to nodes from another sample.
+        - Large n (>256), unbatched: FAVOR+ linear attention for O(n) complexity (avoids n² softmax)
+        - Small n, unbatched: Standard softmax attention
         """
         n = x.size(0)
         q = self.proj_q(x)
         k = self.proj_k(x)
         v = self.proj_v(x)
-        if self.use_linear_attn and n > 256:
+        if batch is not None:
+            # Batch-aware path: reshape to (B, N, d) so each sample attends only within itself.
+            # Nodes from different samples never interact in either FAVOR+ or softmax path.
+            B = int(batch.max().item()) + 1
+            N = n // B
+            q = q.view(B, N, self.out_dim)
+            k = k.view(B, N, self.out_dim)
+            v = v.view(B, N, self.out_dim)
+            if self.use_linear_attn and N > 256:
+                # FAVOR+ per sample: each graph gets its own independent (d, d) kv matrix
+                scale = self.out_dim ** -0.25
+                q = (F.elu(q) + 1) * scale
+                k = (F.elu(k) + 1) * scale
+                kv   = torch.einsum("bnd,bnv->bdv", k, v)                        # (B, d, d)
+                norm = torch.einsum("bnd,bd->bn", q, k.sum(dim=1)) + 1e-8        # (B, N)
+                out  = torch.einsum("bnd,bdv->bnv", q, kv) / norm.unsqueeze(-1)  # (B, N, d)
+            else:
+                # Batched softmax: B independent (N, N) attention matrices via bmm
+                scale = self.out_dim ** -0.5
+                attn = torch.bmm(q, k.transpose(1, 2)) * scale                   # (B, N, N)
+                attn = F.softmax(attn, dim=-1)
+                attn = F.dropout(attn, p=self.dropout, training=self.training)
+                out  = torch.bmm(attn, v)                                         # (B, N, d)
+            out = out.reshape(n, self.out_dim)
+        elif self.use_linear_attn and n > 256:
             # FAVOR+ style: kernel feature map phi(x)=elu(x)+1 makes attention linearizable
             # out_i = sum_j phi(q_i)^T phi(k_j) v_j / sum_j phi(q_i)^T phi(k_j)
             # Implemented via: q @ (k^T @ v) / (q @ sum(k))
