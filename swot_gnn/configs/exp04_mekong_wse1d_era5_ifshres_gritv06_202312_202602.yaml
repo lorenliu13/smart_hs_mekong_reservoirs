@@ -25,7 +25,7 @@
 #   std_m   = std_norm   * (lake_std + 1e-8)            (scale only, no shift)
 #
 model:
-  model_type: SWOTGNNGauss     # selects SWOTGNNGauss from MODEL_REGISTRY
+  model_type: SWOTGNNGaussCRPS     # selects SWOTGNNGauss from MODEL_REGISTRY
   swot_dim: 8                  # obs_mask, latest_wse, latest_wse_u, latest_wse_std,
                                 # latest_area_total, days_since_last_obs, doy_sin, doy_cos
   climate_dim: 13              # LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd, swvl1-4

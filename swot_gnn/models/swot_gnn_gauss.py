@@ -58,11 +58,10 @@ class SWOTGNNGauss(SWOTGNN):
             mean:    (num_nodes,) — predicted mean WSE (normalised)
             log_std: (num_nodes,) — predicted log standard deviation (normalised)
         """
-        # Shared backbone — identical to SWOTGNN.forward lines 200–207
+        # Shared backbone — identical to SWOTGNN.forward; heads handle last-step extraction internally
         h = self.encoder(x)
         static_emb = self.static_encoder(static_features) if static_features is not None else None
         for st in self.st_blocks:
             h = st(h, edge_index, batch=batch, static=static_emb)   # (N, T, hidden_dim)
 
-        h_last = h[:, -1, :]                           # (N, hidden_dim)
-        return self.mean_head(h_last), self.log_std_head(h_last)
+        return self.mean_head(h), self.log_std_head(h)
