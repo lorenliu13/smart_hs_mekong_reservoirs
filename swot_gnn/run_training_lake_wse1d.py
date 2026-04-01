@@ -39,8 +39,8 @@ from data.temporal_graph_dataset_lake import (
     build_temporal_dataset_from_lake_datacubes,
     collate_temporal_graph_batch_lake,
 )
-from models.swot_gnn import SWOTGNN
-from training.train import ObservedMSELoss, _run_epoch
+from models.registry import MODEL_REGISTRY
+from training.train import _run_epoch
 
 
 # ── Main training routine ──────────────────────────────────────────────────────
@@ -84,8 +84,11 @@ def train(cfg, args):
     val_loader   = torch.utils.data.DataLoader(val_ds,   shuffle=False, **loader_kwargs)
 
     # ── Model ───────────────────────────────────────────────────────────────
-    model     = SWOTGNN(**cfg["model"]).to(device)
-    criterion = ObservedMSELoss()
+    model_cfg  = dict(cfg["model"])
+    model_type = model_cfg.pop("model_type", "SWOTGNN")
+    spec       = MODEL_REGISTRY[model_type]
+    model      = spec.model_cls(**model_cfg).to(device)
+    criterion  = spec.loss_cls()
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"]["lr"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-5
@@ -231,7 +234,7 @@ def train(cfg, args):
     ax.axvline(best_epoch + 1, color="gray", linestyle="--",
                label=f"Best (epoch {best_epoch + 1})")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("MSE loss (observed lakes)")
+    ax.set_ylabel("Loss (observed lakes)")
     ax.set_title(f"{args.run_name}")
     ax.legend()
     plt.tight_layout()
@@ -331,8 +334,10 @@ def main():
     if args.seed is None:
         args.seed = cfg.get("seed", 42)
 
-    # Bake seed into the run name so the folder is always self-describing
-    args.run_name = f"{args.run_name}_s{args.seed}"
+    # Bake model slug and seed into the run name so the folder is always self-describing
+    model_type = cfg["model"].get("model_type", "SWOTGNN")
+    model_slug = MODEL_REGISTRY[model_type].slug
+    args.run_name = f"{args.run_name}_{model_slug}_s{args.seed}"
 
     assert cfg["training"]["forecast_horizon"] == 1, (
         "run_lake_exp01.py is designed for forecast_horizon=1. "

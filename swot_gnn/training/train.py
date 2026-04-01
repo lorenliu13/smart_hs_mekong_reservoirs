@@ -4,6 +4,7 @@ Training primitives for SWOT-GNN.
 Exports:
     ObservedMSELoss          — masked MSE for 1-step forecasting
     ObservedMSELossMultiStep — masked MSE for multi-step forecasting
+    ObservedGaussianNLLLoss  — masked Gaussian NLL for probabilistic forecasting
     _run_epoch               — one forward pass over a DataLoader (train or eval)
 """
 import torch
@@ -46,6 +47,32 @@ class ObservedMSELoss(nn.Module):
         loss = (pred - target) ** 2          # element-wise squared error
         masked_loss = loss * mask            # zero-out unobserved segments
         return masked_loss.sum() / (mask.sum() + 1e-8)  # mean over observed nodes
+
+
+class ObservedGaussianNLLLoss(nn.Module):
+    """Gaussian NLL loss, computed only at observed nodes (obs_mask=1).
+
+    Inputs:
+        mean:    (n_seg,) — predicted mean WSE (normalised)
+        log_std: (n_seg,) — predicted log standard deviation (normalised)
+        target:  (n_seg,) — ground-truth WSE (normalised)
+        mask:    (n_seg,) — 1 if observed, 0 if not
+
+    Loss per element: 0.5 * (2·log_std + ((target - mean) / exp(log_std))²)
+    which equals -log N(target | mean, exp(log_std)²) up to a constant.
+    log_std is clamped to [-6, 6] to prevent numerical explosion.
+    """
+
+    def forward(
+        self,
+        mean:    torch.Tensor,  # (n_seg,)
+        log_std: torch.Tensor,  # (n_seg,)
+        target:  torch.Tensor,  # (n_seg,)
+        mask:    torch.Tensor,  # (n_seg,)
+    ) -> torch.Tensor:
+        log_std = log_std.clamp(-6, 6)
+        nll = 0.5 * (2 * log_std + ((target - mean) / log_std.exp()) ** 2)
+        return (nll * mask).sum() / (mask.sum() + 1e-8)
 
 
 def _run_epoch(
@@ -102,8 +129,11 @@ def _run_epoch(
 
             pred = model(x_batch, edge_index_tiled,
                          static_features=static_batch, batch=batch_vec)
-            # ObservedMSELoss normalises by mask.sum() — loss is already a mean
-            loss = criterion(pred, lab, msk)
+            # Gaussian models return (mean, log_std); point models return a tensor
+            if isinstance(pred, tuple):
+                loss = criterion(*pred, lab, msk)  # mean, log_std, target, mask
+            else:
+                loss = criterion(pred, lab, msk)
 
             if is_train:
                 loss.backward()

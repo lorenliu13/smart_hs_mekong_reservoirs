@@ -35,7 +35,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from data.temporal_graph_dataset_lake import build_temporal_dataset_from_lake_datacubes
-from models.swot_gnn import SWOTGNN
+from models.registry import MODEL_REGISTRY
 from training.evaluate import compute_kge
 
 
@@ -77,10 +77,12 @@ def residual_autocorr_lag1(obs, pred, dates=None):
 def denormalize(df: pd.DataFrame, lake_stats: pd.DataFrame) -> pd.DataFrame:
     """
     Add pred_m / target_m columns (raw WSE in metres).
+    For probabilistic models, also adds pred_std_m (physical-unit std).
 
     lake_stats must have columns: lake_id, lake_mean, lake_std
     WSE normalisation: wse_norm = (wse - lake_mean) / (lake_std + 1e-8)
     Inverse:           wse      = wse_norm * (lake_std + 1e-8) + lake_mean
+    Std inverse:       std      = std_norm  * (lake_std + 1e-8)   (scale only, no shift)
     """
     df = df.merge(lake_stats[["lake_id", "lake_mean", "lake_std"]],
                   on="lake_id", how="left")
@@ -88,6 +90,8 @@ def denormalize(df: pd.DataFrame, lake_stats: pd.DataFrame) -> pd.DataFrame:
     mean_   = df["lake_mean"].fillna(0.0)
     df["pred_m"]   = df["pred_norm"]   * std_eps + mean_
     df["target_m"] = df["target_norm"] * std_eps + mean_
+    if "pred_std_norm" in df.columns:
+        df["pred_std_m"] = df["pred_std_norm"] * std_eps  # std scales, does not shift
     return df
 
 
@@ -95,7 +99,8 @@ def run_inference(ds, model, device, split_name=''):
     """Run model over all samples; return DataFrame of observed-lake predictions.
 
     Supports forecast_horizon >= 1. Each row records:
-        lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm
+        lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm,
+        pred_std_norm (NaN for deterministic / point models)
     """
     records = []
     model.eval()
@@ -107,8 +112,15 @@ def run_inference(ds, model, device, split_name=''):
             edge_index = data_list[0].edge_index.to(device)
             static_t   = static.to(device)
 
-            pred     = model(x, edge_index, static_features=static_t)
-            pred_cpu = pred.cpu().numpy()
+            pred_out = model(x, edge_index, static_features=static_t)
+
+            # Gaussian models return (mean, log_std); point models return a tensor
+            if isinstance(pred_out, tuple):
+                mean_cpu = pred_out[0].cpu().numpy()
+                std_cpu  = pred_out[1].clamp(-6, 6).exp().cpu().numpy()  # σ_norm
+            else:
+                mean_cpu = pred_out.cpu().numpy()
+                std_cpu  = None
 
             # Normalise to 2-D (n_lakes, horizon) regardless of forecast_horizon
             labels_np = labels.numpy()
@@ -116,8 +128,10 @@ def run_inference(ds, model, device, split_name=''):
             if labels_np.ndim == 1:          # forecast_horizon == 1 backward compat
                 labels_np = labels_np[:, np.newaxis]
                 mask_np   = mask_np[:, np.newaxis]
-            if pred_cpu.ndim == 1:
-                pred_cpu  = pred_cpu[:, np.newaxis]
+            if mean_cpu.ndim == 1:
+                mean_cpu = mean_cpu[:, np.newaxis]
+            if std_cpu is not None and std_cpu.ndim == 1:
+                std_cpu = std_cpu[:, np.newaxis]
 
             j         = int(ds.valid_starts[idx])
             init_date = pd.Timestamp(ds.ecmwf_init_dates[j])
@@ -132,8 +146,9 @@ def run_inference(ds, model, device, split_name=''):
                             'init_date'    : init_date,
                             'forecast_date': forecast_date,
                             'lead_day'     : d,
-                            'pred_norm'    : float(pred_cpu[lake_i, d]),
+                            'pred_norm'    : float(mean_cpu[lake_i, d]),
                             'target_norm'  : float(labels_np[lake_i, d]),
+                            'pred_std_norm': float(std_cpu[lake_i, d]) if std_cpu is not None else float('nan'),
                         })
 
     df = pd.DataFrame(records)
@@ -237,8 +252,11 @@ def main():
     print(f'Lakes : {test_ds.n_lakes}   Forecast horizon: {test_ds.forecast_horizon}')
 
     # ── Load model checkpoint ─────────────────────────────────────────────────
-    device = torch.device(args.device)
-    model  = SWOTGNN(**cfg_model).to(device)
+    device         = torch.device(args.device)
+    cfg_model_load = dict(cfg_model)
+    model_type     = cfg_model_load.pop("model_type", "SWOTGNN")
+    spec           = MODEL_REGISTRY[model_type]
+    model          = spec.model_cls(**cfg_model_load).to(device)
 
     ckpt       = torch.load(ckpt_path, map_location=device, weights_only=False)
     state_dict = ckpt.get('model_state_dict', ckpt)
@@ -271,7 +289,13 @@ def main():
     col_order = [
         "lake_id", "init_date", "forecast_date", "lead_day",
         "pred_norm", "target_norm", "pred_m", "target_m",
+        "pred_std_norm", "pred_std_m",
     ]
+    # pred_std_norm / pred_std_m are NaN for deterministic models; keep columns consistent
+    for col in ("pred_std_norm", "pred_std_m"):
+        for df in (train_df, val_df, test_df):
+            if col not in df.columns:
+                df[col] = float("nan")
     train_df[col_order].to_csv(run_dir / "train_result_df.csv", index=False)
     val_df[col_order].to_csv(run_dir   / "val_result_df.csv",   index=False)
     test_df[col_order].to_csv(run_dir  / "test_result_df.csv",  index=False)
