@@ -129,11 +129,6 @@ def train(cfg, args):
         lr_history.append(lr)
         ts_history.append(datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
-        print(f"Epoch {epoch+1:>3}/{cfg['training']['num_epochs']} | "
-              f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
-              f"Best: ep{best_epoch+1} ({best_val_loss:.4f}) | LR: {lr:.2e} | "
-              f"Time: {epoch_secs:.1f}s")
-
         if avg_val < best_val_loss:
             best_val_loss    = avg_val
             best_epoch       = epoch
@@ -141,6 +136,11 @@ def train(cfg, args):
             torch.save(model.state_dict(), tmp_ckpt)
         else:
             patience_counter += 1
+
+        print(f"Epoch {epoch+1:>3}/{cfg['training']['num_epochs']} | "
+              f"Train: {avg_train:.4f} | Val: {avg_val:.4f} | "
+              f"Best: ep{best_epoch+1} ({best_val_loss:.4f}) | LR: {lr:.2e} | "
+              f"Time: {epoch_secs:.1f}s")
 
         if patience_counter >= patience:
             print(f"Early stopping at epoch {epoch+1}: "

@@ -94,8 +94,8 @@ def _run_epoch(
             # batch vector tells _global_attention which nodes belong to which sample
             batch_vec    = torch.arange(B, device=device).repeat_interleave(n_lakes)
             static_batch = static_feats.reshape(B * n_lakes, -1).to(device)
-            lab          = labels.reshape(B * n_lakes, -1).to(device)
-            msk          = masks.reshape(B * n_lakes, -1).to(device)
+            lab          = labels.reshape(B * n_lakes).to(device)   # (B*N,) — flat 1-D
+            msk          = masks.reshape(B * n_lakes).to(device)    # (B*N,) — flat 1-D
 
             if is_train:
                 optimizer.zero_grad()
