@@ -8,7 +8,6 @@ Exports:
 """
 import torch
 import torch.nn as nn
-from torch.amp import autocast
 from torch.utils.data import DataLoader
 
 
@@ -55,23 +54,20 @@ def _run_epoch(
     criterion: nn.Module,
     device: torch.device,
     optimizer=None,
-    scaler=None,
     grad_clip: float = 1.0,
 ) -> float:
-    """Run one forward pass over `loader` using true batching and mixed-precision AMP.
+    """Run one forward pass over `loader` using true batching.
 
     All samples in each DataLoader batch are merged into a single forward pass:
     node tensors are concatenated, edge_index is tiled with per-sample offsets,
     and a batch vector isolates attention within each sample.
 
     When `optimizer` is provided (training mode) the function back-propagates
-    and steps the optimiser via GradScaler.  Without it the function runs in
-    eval / no-grad mode.
+    and steps the optimiser.  Without it the function runs in eval / no-grad mode.
 
     Returns the mean per-batch loss over the full loader.
     """
     is_train = optimizer is not None
-    use_amp  = device.type == "cuda"
     model.train(is_train)
     ctx = torch.enable_grad() if is_train else torch.no_grad()
 
@@ -104,21 +100,16 @@ def _run_epoch(
             if is_train:
                 optimizer.zero_grad()
 
-            with autocast(device_type=device.type, enabled=use_amp):
-                pred = model(x_batch, edge_index_tiled,
-                             static_features=static_batch, batch=batch_vec)
-                # ObservedMSELoss normalises by mask.sum() — loss is already a mean
-                loss = criterion(pred, lab, msk)
+            pred = model(x_batch, edge_index_tiled,
+                         static_features=static_batch, batch=batch_vec)
+            # ObservedMSELoss normalises by mask.sum() — loss is already a mean
+            loss = criterion(pred, lab, msk)
 
             if is_train:
-                scaler.scale(loss).backward()
+                loss.backward()
                 if grad_clip > 0:
-                    # Unscale before clipping so the threshold is in true gradient units
-                    scaler.unscale_(optimizer)
                     nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                # step() is skipped automatically if gradients contain inf/nan
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
 
             total_loss += loss.item()
             n_batches  += 1

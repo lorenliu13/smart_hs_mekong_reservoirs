@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-from torch.amp import GradScaler
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -91,8 +90,6 @@ def train(cfg, args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=8, min_lr=1e-5
     )
-    # GradScaler prevents float16 gradient underflow; disabled automatically on CPU
-    scaler    = GradScaler(enabled=device.type == "cuda")
     grad_clip = cfg["training"].get("grad_clip", 1.0)
     patience  = cfg["training"].get("patience", 20)
 
@@ -120,7 +117,7 @@ def train(cfg, args):
     for epoch in range(cfg["training"]["num_epochs"]):
         epoch_start = time.time()
         avg_train = _run_epoch(model, train_loader, criterion, device,
-                               optimizer=optimizer, scaler=scaler, grad_clip=grad_clip)
+                               optimizer=optimizer, grad_clip=grad_clip)
         avg_val   = _run_epoch(model, val_loader,   criterion, device)
         epoch_secs = time.time() - epoch_start
 
