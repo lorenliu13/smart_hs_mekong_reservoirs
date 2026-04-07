@@ -39,28 +39,25 @@ from shapely.ops import unary_union
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 0
+AREA_THRESHOLD_SQKM = 0.1  # Must match the lake graph that was produced
+OBS_COUNT_THRESHOLD = 20   # Must match the lake graph that was produced
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+_SUFFIX = rf"area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+_RESERVOIRS_DIR = (
+    rf"E:\Project_2025_2026\Smart_hs\raw_data\grit"
+    rf"\GRIT_mekong_mega_reservoirs\reservoirs\lake_graph_{_SUFFIX}"
+)
 CATCHMENT_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\catchments"
     r"\GRITv06_catchments_great_mekong.shp"
 )
-UPSTREAM_SEGS_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
-)
-LAKE_GRAPH_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
-)
-OUTPUT_SHP = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
-)
-OUTPUT_GPKG = OUTPUT_SHP.replace(".shp", ".gpkg")
+UPSTREAM_SEGS_CSV = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_upstream_segments_{_SUFFIX}.csv"
+LAKE_GRAPH_CSV   = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_graph_{_SUFFIX}.csv"
+OUTPUT_SHP       = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_catchments_{_SUFFIX}.shp"
+OUTPUT_GPKG      = OUTPUT_SHP.replace(".shp", ".gpkg")
 
 # ---------------------------------------------------------------------------
 # 1. Load lake graph (attributes to carry into output)

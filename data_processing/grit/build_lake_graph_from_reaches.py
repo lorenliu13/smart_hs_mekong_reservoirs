@@ -55,12 +55,18 @@ Output: gritv06_pld_lake_graph_{threshold}sqkm.csv
 import pandas as pd
 import geopandas as gpd
 from collections import defaultdict
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 0   # Only analyse lakes with poly_area > this value (sq km)
+# LAKE_AREA_THRESHOLD_SQKM = 0   # Only analyse lakes with poly_area > this value (sq km)
 TERMINAL_NODE_ID = -1            # Assigned to lakes with no downstream lake (basin outlets).
+AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
+OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lake
+# When True, reaches shared by multiple lakes are assigned exclusively to the
+# most-downstream lake (determined by BFS downstream from the contested reach).
+DEDUPLICATE_SHARED_REACHES = True
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -74,13 +80,17 @@ INPUT_CSV = (
     "GRIT_mekong_mega_reservoirs/reaches/"
     "gritv06_reaches_great_mekong_with_lake_id.csv"
 )
+_OUTPUT_DIR = Path(
+    rf"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs\lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+)
+_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    _OUTPUT_DIR
+    / rf"gritv06_great_mekong_pld_lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 SWOT_DAILY_CSV = (
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes_daily"
-    r"\swot_lake_2023_12_2026_02_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
+    rf"\swot_lake_2023_12_2026_02_daily_wse_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 
 # Load the hydrobasin watershed shapefile to assign basin ID to lakes
@@ -91,14 +101,13 @@ HYDROBASINS_DIR = (
 HYDROBASINS_LEVELS = range(1, 9)  # levels 1–8
 
 # ---------------------------------------------------------------------------
-# 1. Load PLD and filter by area threshold, then intersect with SWOT QC lakes
+# 1. Load PLD and derive valid lake IDs from SWOT daily WSE file
+#    (area and observation-count filters are already applied upstream)
 # ---------------------------------------------------------------------------
 pld = gpd.read_file(PLD_PATH)
 pld["poly_area"] = pd.to_numeric(pld["poly_area"], errors="coerce")
 pld["lake_id"]   = pd.to_numeric(pld["lake_id"],   errors="coerce").astype("int64")
-valid_lake_ids: set[int] = set(
-    pld.loc[pld["poly_area"] > LAKE_AREA_THRESHOLD_SQKM, "lake_id"]
-)
+print(f"PLD lakes total: {len(pld)}")
 
 # Build lake_id → (lon, lat) lookup from PLD centroid attributes
 lake_lonlat: dict[int, tuple[float, float]] = (
@@ -107,19 +116,12 @@ lake_lonlat: dict[int, tuple[float, float]] = (
     .apply(lambda r: (float(r["lon"]), float(r["lat"])), axis=1)
     .to_dict()
 )
-print(
-    f"PLD lakes total: {len(pld)}, "
-    f"after poly_area > {LAKE_AREA_THRESHOLD_SQKM} sqkm filter: {len(valid_lake_ids)}"
-)
 
-# Keep only lakes that have WSE observations in the SWOT daily data file
+# Valid lakes are those present in the SWOT daily file (already area- and
+# obs-count-filtered by swot_lake_daily_wse_postprocess.py)
 swot_daily = pd.read_csv(SWOT_DAILY_CSV, usecols=["lake_id"])
-swot_lake_ids: set[int] = set(swot_daily["lake_id"].astype("int64").unique())
-valid_lake_ids &= swot_lake_ids
-print(
-    f"SWOT daily lakes with WSE: {len(swot_lake_ids)}, "
-    f"after with poly area filter: {len(valid_lake_ids)}"
-)
+valid_lake_ids: set[int] = set(swot_daily["lake_id"].astype("int64").unique())
+print(f"Valid lakes from SWOT daily WSE: {len(valid_lake_ids)}")
 
 # ---------------------------------------------------------------------------
 # 2. Load reach data
@@ -132,7 +134,7 @@ lake_df = df[df["lake_id"].notna()].copy()
 lake_df["lake_id"] = lake_df["lake_id"].astype("int64")
 lake_df = lake_df[lake_df["lake_id"].isin(valid_lake_ids)].copy()
 print(
-    f"Lake rows after area filter: {len(lake_df)}, "
+    f"Lake rows after filtering to valid lakes: {len(lake_df)}, "
     f"unique lakes: {lake_df['lake_id'].nunique()}"
 )
 
@@ -169,6 +171,112 @@ df["_dn_ids"] = df["downstre_1"].apply(parse_ids)
 all_fid_to_up: dict[int, list[int]] = dict(zip(df["reach_id"], df["_up_ids"]))
 # ALL reaches: fid → list of downstream fids
 all_fid_to_dn: dict[int, list[int]] = dict(zip(df["reach_id"], df["_dn_ids"]))
+
+# ---------------------------------------------------------------------------
+# 4b. (Optional) Deduplicate reaches shared by multiple lakes.
+#
+# Two conflict types are resolved:
+#   (a) Reach-level : a reach_id appears under >1 lake_id directly.
+#   (b) Segment-level: a segment_id (column "segment_id" in the reaches CSV)
+#       has reaches belonging to >1 lake.
+#
+# For every contested reach (union of both types), the candidate lakes are the
+# set of lakes that claim the reach directly OR share its segment. BFS is run
+# downstream from each contested reach through plain (non-contested) river
+# reaches; the first candidate-lake exclusive reach encountered wins. Rows for
+# losing lakes are dropped from lake_df so all subsequent lookups reflect the
+# deduplication automatically.
+# ---------------------------------------------------------------------------
+
+# --- (a) Reach-level conflicts ---
+reach_lake_pairs = lake_df[["reach_id", "lake_id"]].drop_duplicates()
+reach_claim_counts = reach_lake_pairs.groupby("reach_id")["lake_id"].count()
+reach_contested: set[int] = set(reach_claim_counts[reach_claim_counts > 1].index)
+
+# reach_id → set of lakes that directly claim it
+reach_to_direct_lakes: dict[int, set[int]] = (
+    reach_lake_pairs.groupby("reach_id")["lake_id"].apply(set).to_dict()
+)
+
+# --- (b) Segment-level conflicts ---
+# segment_id → set of lake_ids that have reaches in it
+seg_to_lakes: dict[int, set[int]] = (
+    lake_df.groupby("segment_id")["lake_id"].apply(set).to_dict()
+)
+contested_segments: set[int] = {
+    seg for seg, lakes in seg_to_lakes.items() if len(lakes) > 1
+}
+# All reaches in a contested segment become contested
+seg_contested: set[int] = set(
+    lake_df.loc[lake_df["segment_id"].isin(contested_segments), "reach_id"]
+)
+
+# reach_id → segment_id (single value per reach; same reach never spans segments)
+reach_to_seg: dict[int, int] = dict(zip(lake_df["reach_id"], lake_df["segment_id"]))
+
+contested_fids: set[int] = reach_contested | seg_contested
+
+if DEDUPLICATE_SHARED_REACHES and contested_fids:
+    print(
+        f"\nDeduplicating: {len(reach_contested)} reach-level conflict(s), "
+        f"{len(contested_segments)} segment-level conflict(s) "
+        f"({len(contested_fids)} total contested reach(es)) ..."
+    )
+
+    # Candidate lakes for each contested reach = direct claimants ∪ segment-mates
+    reach_to_candidates: dict[int, frozenset[int]] = {
+        fid: frozenset(
+            reach_to_direct_lakes.get(fid, set())
+            | seg_to_lakes.get(reach_to_seg.get(fid), set())
+        )
+        for fid in contested_fids
+    }
+
+    # Preliminary reach→lake using only non-contested reaches (unambiguous)
+    prelim_reach_to_lake: dict[int, int] = dict(
+        zip(
+            lake_df.loc[~lake_df["reach_id"].isin(contested_fids), "reach_id"],
+            lake_df.loc[~lake_df["reach_id"].isin(contested_fids), "lake_id"],
+        )
+    )
+
+    # BFS downstream from each contested reach to find the most-downstream candidate
+    contested_winner: dict[int, int] = {}
+    for fid, candidates in reach_to_candidates.items():
+        winner = None
+        visited: set[int] = {fid}
+        queue: list[int] = list(all_fid_to_dn.get(fid, []))
+        while queue and winner is None:
+            cur = queue.pop(0)
+            if cur in visited:
+                continue
+            visited.add(cur)
+            lake = prelim_reach_to_lake.get(cur)
+            if lake in candidates:
+                winner = lake  # first exclusive reach of a candidate lake wins
+            else:
+                queue.extend(all_fid_to_dn.get(cur, []))
+        if winner is None:
+            winner = min(candidates)  # fallback: smallest lake_id (deterministic)
+        contested_winner[fid] = winner
+
+    # Drop rows where the lake lost the contested reach
+    drop_mask = lake_df["reach_id"].isin(contested_fids) & lake_df.apply(
+        lambda r: contested_winner.get(r["reach_id"]) != r["lake_id"], axis=1
+    )
+    n_dropped = drop_mask.sum()
+    lake_df = lake_df[~drop_mask].copy()
+    print(f"  Dropped {n_dropped} reach-lake row(s) for non-downstream lakes")
+    print(
+        f"  Lake rows after deduplication: {len(lake_df)}, "
+        f"unique lakes: {lake_df['lake_id'].nunique()}"
+    )
+elif contested_fids or contested_segments:
+    print(
+        f"\nNote: {len(contested_fids)} contested reach(es) across "
+        f"{len(contested_segments)} segment(s) "
+        "(DEDUPLICATE_SHARED_REACHES=False — keeping all assignments)."
+    )
 
 # Mapping: reach fid → lake_id  (FILTERED lake reaches only)
 # Used to check "does a reach belong to a (filtered) lake, and which one?"
@@ -396,8 +504,6 @@ print(f"Basin outlet lakes (-1):       {n_basin_outlets}")
 # named "hybasin_level_X". Lakes whose centroid falls outside all polygons
 # (very rare edge case) receive NaN for that level.
 # ---------------------------------------------------------------------------
-from pathlib import Path
-
 print("\nAssigning HydroBasins sub-basin IDs to lakes...")
 
 # Build a GeoDataFrame of lake centroids (WGS-84, same CRS as HydroBasins)

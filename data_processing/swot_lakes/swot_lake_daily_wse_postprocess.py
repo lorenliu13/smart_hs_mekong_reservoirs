@@ -5,8 +5,9 @@ Steps:
   1. Load outlier-flagged SWOT lake WSE data.
   2. Remove confirmed outlier observations (outlier == True).
   3. Aggregate valid sub-daily / multi-pass observations to daily scale.
-  4. Discard lakes with fewer than 10 daily observations.
-  5. Export final daily SWOT Lake WSE CSV.
+  4. Discard lakes with area < AREA_THRESHOLD_SQKM.
+  5. Discard lakes with fewer than OBS_COUNT_THRESHOLD daily observations.
+  6. Export final daily SWOT Lake WSE CSV.
 
 Input:
   E:/Project_2025_2026/Smart_hs/processed_data/swot/mekong_river_basin/swot/lakes
@@ -25,18 +26,24 @@ import pandas as pd
 from pathlib import Path
 
 TIME_RANGE = '2023_12_2026_02'
+AREA_THRESHOLD_SQKM = 0  # Minimum lake area in square kilometers to retain
+OBS_COUNT_THRESHOLD = 10   # Minimum number of daily observations to retain a lake
 
 # ── Paths ───────────────────────────────────────────────────────────────────────
 OUTLIER_CSV = Path(
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
 ) / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
+PLD_PATH = (
+    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database"
+    r"\swot_prior_lake_database_great_mekong_overlap_with_grit.csv"
+)
 
 OUTPUT_DIR = Path(
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes_daily"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_CSV = OUTPUT_DIR / f"swot_lake_{TIME_RANGE}_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
+OUTPUT_CSV = OUTPUT_DIR / f"swot_lake_{TIME_RANGE}_daily_wse_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 
 # =============================================================================
 # 1. Load outlier-flagged data
@@ -99,11 +106,23 @@ print(f"  Multi-pass days: {(daily['n_passes'] > 1).sum():,}  "
       f"(max {daily['n_passes'].max()} passes/day)")
 
 # =============================================================================
+# Discard lakes with area less than certain threshold 
+# =============================================================================
+print(f"Filtering lakes by minimum area (>= {AREA_THRESHOLD_SQKM} km²) ...")
+pld_df = pd.read_csv(PLD_PATH, usecols=["lake_id", "poly_area"])
+daily = daily.merge(pld_df[['lake_id', 'poly_area']], on='lake_id', how='left')
+before_area = daily["lake_id"].nunique()
+daily = daily[daily['poly_area'] >= AREA_THRESHOLD_SQKM].copy()
+print(f"  Lakes before   : {before_area:,}")
+print(f"  Lakes retained : {daily['lake_id'].nunique():,}  (dropped {before_area - daily['lake_id'].nunique():,})")
+print(f"  Daily rows     : {len(daily):,}")
+                                           
+# =============================================================================
 # 5. Discard lakes with fewer than 10 daily observations
 # =============================================================================
-print("Filtering lakes by minimum daily observation count ...")
+print(f"Filtering lakes by minimum daily observation count (>= {OBS_COUNT_THRESHOLD} days) ...")
 lake_counts = daily.groupby("lake_id")["date"].count()
-valid_lakes  = lake_counts[lake_counts >= 10].index
+valid_lakes  = lake_counts[lake_counts >= OBS_COUNT_THRESHOLD].index
 before = daily["lake_id"].nunique()
 daily  = daily[daily["lake_id"].isin(valid_lakes)].copy()
 print(f"  Lakes before   : {before:,}")

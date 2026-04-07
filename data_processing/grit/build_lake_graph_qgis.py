@@ -30,16 +30,19 @@ from shapely.geometry import LineString, Point
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 0   # Must match the value used in build_lake_graph_from_reaches.py
+AREA_THRESHOLD_SQKM = 0.1  # Must match the value used in build_lake_graph_from_reaches.py
+OBS_COUNT_THRESHOLD = 20   # Must match the value used in build_lake_graph_from_reaches.py
 # Terminal node IDs are all negative integers (-1, -2, …); real lake IDs are positive.
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-GRAPH_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+_SUFFIX = rf"area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+_RESERVOIRS_DIR = (
+    rf"E:\Project_2025_2026\Smart_hs\raw_data\grit"
+    rf"\GRIT_mekong_mega_reservoirs\reservoirs\lake_graph_{_SUFFIX}"
 )
+GRAPH_CSV = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_graph_{_SUFFIX}.csv"
 PLD_SHP = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
     r"\GRIT_mekong_mega_reservoirs\prior_lake_database"
@@ -50,10 +53,7 @@ REACHES_SHP = (
     r"\GRIT_mekong_mega_reservoirs\reaches"
     r"\gritv06_reaches_great_mekong_with_lake_id.gpkg"
 )
-OUTPUT_GPKG = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit"
-    rf"\GRIT_mekong_mega_reservoirs\reservoirs\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.gpkg"
-)
+OUTPUT_GPKG = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_graph_{_SUFFIX}.gpkg"
 
 # ---------------------------------------------------------------------------
 # Load graph CSV

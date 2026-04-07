@@ -71,11 +71,17 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-LAKE_AREA_THRESHOLD_SQKM = 0   # Must match the lake graph that was produced
+AREA_THRESHOLD_SQKM = 0.1  # Must match the lake graph that was produced
+OBS_COUNT_THRESHOLD = 20   # Must match the lake graph that was produced
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+_SUFFIX = rf"area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+_RESERVOIRS_DIR = (
+    rf"E:\Project_2025_2026\Smart_hs\raw_data\grit"
+    rf"\GRIT_mekong_mega_reservoirs\reservoirs\lake_graph_{_SUFFIX}"
+)
 REACHES_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reaches"
     r"\gritv06_reaches_great_mekong_with_lake_id.csv"
@@ -84,18 +90,12 @@ SEGMENTS_CSV = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\segments"
     r"\gritv06_segments_great_mekong.csv"
 )
-LAKE_GRAPH_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_graph_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
-)
+LAKE_GRAPH_CSV = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_graph_{_SUFFIX}.csv"
 PLD_PATH = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database"
     r"\swot_prior_lake_database_great_mekong_overlap_with_grit.csv"
 )
-OUTPUT_CSV = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\reservoirs"
-    rf"\gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
-)
+OUTPUT_CSV = rf"{_RESERVOIRS_DIR}\gritv06_great_mekong_pld_lake_upstream_segments_{_SUFFIX}.csv"
 
 # ---------------------------------------------------------------------------
 # 1. Load valid lake IDs from the pre-built lake graph
