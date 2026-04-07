@@ -378,21 +378,37 @@ def main():
     print(f"  train: {len(train_df)} rows | val: {len(val_df)} | test: {len(test_df)}\n")
 
     # ── Per-lake metrics (physical units) ─────────────────────────────────────
-    lake_metrics_df = compute_lake_metrics(test_df)
-    lake_metrics_df.to_csv(run_dir / "lake_metrics_test.csv", index=False)
-    print(f'Per-lake metrics saved: {len(lake_metrics_df)} lakes')
+    val_test_df = pd.concat([val_df, test_df], ignore_index=True)
+    full_df     = pd.concat([train_df, val_df, test_df], ignore_index=True)
+
+    lake_metrics_test_df     = compute_lake_metrics(test_df)
+    lake_metrics_val_test_df = compute_lake_metrics(val_test_df)
+    lake_metrics_full_df     = compute_lake_metrics(full_df)
+
+    lake_metrics_test_df.to_csv(run_dir     / "lake_metrics_test.csv",     index=False)
+    lake_metrics_val_test_df.to_csv(run_dir / "lake_metrics_val_test.csv", index=False)
+    lake_metrics_full_df.to_csv(run_dir     / "lake_metrics_full.csv",     index=False)
+    print(f'Per-lake metrics saved ({len(lake_metrics_test_df)} lakes each):')
     print(f'  -> {run_dir}/lake_metrics_test.csv')
+    print(f'  -> {run_dir}/lake_metrics_val_test.csv')
+    print(f'  -> {run_dir}/lake_metrics_full.csv')
 
     # ── Median summary with 5th-95th percentile CI ────────────────────────────
     metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr',
                    'crps_m', 'cov90', 'piw90_m']
-    metric_cols = [c for c in metric_cols if c in lake_metrics_df.columns]
-    print('\n=== Median Per-Lake Metrics (5th-95th CI) ===')
-    for col in metric_cols:
-        med = lake_metrics_df[col].median()
-        lo  = lake_metrics_df[col].quantile(0.05)
-        hi  = lake_metrics_df[col].quantile(0.95)
-        print(f'  {col:<12}: {med:6.3f}  ({lo:.3f} - {hi:.3f})')
+
+    def _print_summary(label, mdf):
+        cols = [c for c in metric_cols if c in mdf.columns]
+        print(f'\n=== {label} — Median Per-Lake Metrics (5th–95th CI) ===')
+        for col in cols:
+            med = mdf[col].median()
+            lo  = mdf[col].quantile(0.05)
+            hi  = mdf[col].quantile(0.95)
+            print(f'  {col:<12}: {med:6.3f}  ({lo:.3f} – {hi:.3f})')
+
+    _print_summary("Test",         lake_metrics_test_df)
+    _print_summary("Val + Test",   lake_metrics_val_test_df)
+    _print_summary("Full record",  lake_metrics_full_df)
 
 
 if __name__ == "__main__":

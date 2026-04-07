@@ -22,7 +22,6 @@ Usage:
     --save-dir        checkpoints \\
     --run-name        exp00_mekong_wse1d_last_obs_gritv06_202312_202512
 """
-import argparse
 import sys
 from pathlib import Path
 
@@ -203,43 +202,25 @@ def _find_valid_starts(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "exp00 baseline: last-observation persistence for next-day WSE — "
-            "no model, no training"
-        )
-    )
-    parser.add_argument("--wse-datacube",    required=True,
-                        help="swot_lake_wse_datacube_wse_norm.nc")
-    parser.add_argument("--era5-datacube",   required=True,
-                        help="swot_lake_era5_climate_datacube.nc")
-    parser.add_argument("--ecmwf-datacube",  required=True,
-                        help="swot_lake_ecmwf_forecast_datacube.nc")
-    parser.add_argument("--static-datacube", required=True,
-                        help="swot_lake_static_datacube.nc")
-    parser.add_argument("--wse-stats-csv",   required=True,
-                        help="lake_wse_norm_stats.csv (used for denormalisation)")
-    parser.add_argument("--lake-graph",      required=True,
-                        help="GRIT PLD lake graph CSV")
-    parser.add_argument("--save-dir",  default="checkpoints",
-                        help="Root directory for run outputs")
-    parser.add_argument("--run-name",
-                        default="exp00_mekong_wse1d_last_obs_gritv06_202312_202512",
-                        help="Run subfolder name")
-    parser.add_argument("--seq-len",          type=int, default=30,
-                        help="ERA5 history window length (default: 30)")
-    parser.add_argument("--forecast-horizon", type=int, default=1,
-                        help="Number of forecast lead days (default: 1)")
-    parser.add_argument("--train-frac", type=float, default=0.7)
-    parser.add_argument("--val-frac",   type=float, default=0.15)
-    parser.add_argument("--test-frac",  type=float, default=0.15)
-    args = parser.parse_args()
+    # ── Paths ─────────────────────────────────────────────────────────────────
+    _DATA = r"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs\swot_gnn\training_data\mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc"
+    wse_datacube    = rf"{_DATA}\swot_lake_wse_datacube_wse_norm.nc"
+    era5_datacube   = rf"{_DATA}\swot_lake_era5_climate_datacube.nc"
+    ecmwf_datacube  = rf"{_DATA}\swot_lake_ecmwf_forecast_datacube.nc"
+    static_datacube = rf"{_DATA}\swot_lake_static_datacube.nc"
+    wse_stats_csv   = rf"{_DATA}\lake_wse_norm_stats.csv"
+    lake_graph      = rf"{_DATA}\gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
+    save_dir        = r"E:\Project_2025_2026\Smart_hs\processed_data\mekong_river_basin_reservoirs\swot_gnn\experiments"
+    run_name        = "exp00_mekong_wse1d_last_obs_gritv06_202312_202602"
 
-    run_dir = Path(args.save_dir) / args.run_name
+    # ── Settings ──────────────────────────────────────────────────────────────
+    seq_len          = 30
+    forecast_horizon = 1
+    train_frac       = 0.7
+    val_frac         = 0.15
+
+    run_dir = Path(save_dir) / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-
-    seq_len          = args.seq_len
-    forecast_horizon = args.forecast_horizon
 
     # ── Load raw arrays from datacubes ────────────────────────────────────────
     print("Loading datacubes …")
@@ -253,10 +234,10 @@ def main():
         era5_dates,
         ecmwf_init_dates,
     ) = assemble_lake_features_from_datacubes(
-        wse_datacube_path            = args.wse_datacube,
-        era5_climate_datacube_path   = args.era5_datacube,
-        ecmwf_forecast_datacube_path = args.ecmwf_datacube,
-        static_datacube_path         = args.static_datacube,
+        wse_datacube_path            = wse_datacube,
+        era5_climate_datacube_path   = era5_datacube,
+        ecmwf_forecast_datacube_path = ecmwf_datacube,
+        static_datacube_path         = static_datacube,
     )
     print(f'Lakes: {len(lake_ids)}  |  ERA5 dates: {len(era5_dates)}  |  '
           f'ECMWF init dates: {len(ecmwf_init_dates)}')
@@ -269,8 +250,8 @@ def main():
         seq_len, forecast_horizon, require_obs=True,
     )
     n_valid   = len(all_valid)
-    train_end = int(n_valid * args.train_frac)
-    val_end   = int(n_valid * (args.train_frac + args.val_frac))
+    train_end = int(n_valid * train_frac)
+    val_end   = int(n_valid * (train_frac + val_frac))
     train_idx = all_valid[:train_end]
     val_idx   = all_valid[train_end:val_end]
     test_idx  = all_valid[val_end:]
@@ -297,7 +278,7 @@ def main():
     print()
 
     # ── Denormalize ───────────────────────────────────────────────────────────
-    lake_stats = pd.read_csv(args.wse_stats_csv)
+    lake_stats = pd.read_csv(wse_stats_csv)
     lake_stats = lake_stats[["lake_id", "lake_mean", "lake_std"]].drop_duplicates("lake_id")
 
     train_df = denormalize(train_raw, lake_stats)
