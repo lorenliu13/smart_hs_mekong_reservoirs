@@ -7,6 +7,7 @@ passes, denormalises predictions, and writes result CSVs + per-lake metrics.
 
 Usage:
   python run_inference_lake.py \\
+    --config          configs/exp02_mekong_wse1d.yaml \\
     --wse-datacube    /path/to/swot_lake_wse_datacube_wse_norm.nc \\
     --era5-datacube   /path/to/swot_lake_era5_climate_datacube.nc \\
     --ecmwf-datacube  /path/to/swot_lake_ecmwf_forecast_datacube.nc \\
@@ -18,9 +19,10 @@ Usage:
     --seed            42 \\
     --device          cuda
 
-Note: --run-name should be the base name passed to training (without the
-_s{seed} suffix).  The seed suffix is appended automatically to match the
-directory created by run_training_lake_wse1d.py.
+Note: --config should be the same YAML passed to training.  The model slug
+and seed suffix are appended to --run-name automatically (identical logic to
+run_training_lake_wse1d.py), so the checkpoint directory is resolved without
+any manual suffix.
 """
 import argparse
 import json
@@ -259,10 +261,14 @@ def main():
                         help="lake_wse_norm_stats.csv (used for denormalisation)")
     parser.add_argument("--lake-graph",      required=True,
                         help="GRIT PLD lake graph CSV")
+    parser.add_argument(
+        "--config", required=True,
+        help="Path to the YAML config used during training (same as --config passed to training)",
+    )
     parser.add_argument("--save-dir",  default="checkpoints",
                         help="Root directory for run outputs (same as training)")
     parser.add_argument("--run-name",  required=True,
-                        help="Base run name passed to training (without _s{seed} suffix)")
+                        help="Base run name passed to training (without _{model_slug}_s{seed} suffix)")
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -274,12 +280,20 @@ def main():
     )
     args = parser.parse_args()
 
-    # Mirror the seed-suffix logic from run_training_lake_wse1d.py
-    if args.seed is None:
-        args.seed = 42
-    run_name_full = f"{args.run_name}_s{args.seed}"
+    with open(args.config) as f:
+        cfg = yaml.safe_load(f)
 
-    run_dir  = Path(args.save_dir) / run_name_full
+    # Mirror run-name construction from run_training_lake_wse1d.py:
+    # seed priority: CLI --seed > config seed > fallback 42
+    if args.seed is None:
+        args.seed = cfg.get("seed", 42)
+
+    # Bake model slug and seed into the run name so the folder is always self-describing
+    model_type = cfg["model"].get("model_type", "SWOTGNN")
+    model_slug = MODEL_REGISTRY[model_type].slug
+    args.run_name = f"{args.run_name}_{model_slug}_s{args.seed}"
+
+    run_dir  = Path(args.save_dir) / args.run_name
     cfg_path = run_dir / "run_config.yaml"
 
     # Resolve checkpoint name from summary.json (training writes best_epoch{NNN}.pt)
