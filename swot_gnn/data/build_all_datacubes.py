@@ -81,6 +81,12 @@ STATIC_EXCLUDE_COLS = [
     "mean_sum_runoff_da",
 ]
 
+# ── Which datacubes to build (set to False to skip) ──────────────────────────
+BUILD_WSE    = False
+BUILD_ERA5   = False
+BUILD_ECMWF  = False
+BUILD_STATIC = True
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HERE = Path(__file__).parent
@@ -116,55 +122,68 @@ if __name__ == "__main__":
     print(f"Date range    : {all_dates[0].date()} … {all_dates[-1].date()} ({len(all_dates)} days)")
 
     # ── 1. WSE ────────────────────────────────────────────────────────────────
-    wse_mod = _import_builder("build_wse_datacube_lake_based")
-    wse_mod.build_wse_datacube(
-        swot_csv=SWOT_LAKE_WSE_CSV,
-        lake_ids=lake_ids,
-        all_dates=all_dates,
-        wse_option=WSE_OPTION,
-        save_dir=SAVE_DIR,
-    )
+    if BUILD_WSE:
+        wse_mod = _import_builder("build_wse_datacube_lake_based")
+        wse_mod.build_wse_datacube(
+            swot_csv=SWOT_LAKE_WSE_CSV,
+            lake_ids=lake_ids,
+            all_dates=all_dates,
+            wse_option=WSE_OPTION,
+            save_dir=SAVE_DIR,
+        )
+    else:
+        print("\n[SKIP] WSE datacube (BUILD_WSE=False)")
 
     # ── 2. ERA5-Land climate ──────────────────────────────────────────────────
-    era5_mod = _import_builder("build_era5_datacube_lake_based")
-    era5_mod.build_era5_climate_datacube(
-        era5_base_dir=ERA5_BASE_DIR,
-        lake_ids=lake_ids,
-        all_dates=all_dates,
-        save_dir=SAVE_DIR,
-    )
+    if BUILD_ERA5:
+        era5_mod = _import_builder("build_era5_datacube_lake_based")
+        era5_mod.build_era5_climate_datacube(
+            era5_base_dir=ERA5_BASE_DIR,
+            lake_ids=lake_ids,
+            all_dates=all_dates,
+            save_dir=SAVE_DIR,
+        )
+    else:
+        print("\n[SKIP] ERA5 climate datacube (BUILD_ERA5=False)")
 
     # ── 3. ECMWF IFS forecast ─────────────────────────────────────────────────
-    ecmwf_mod = _import_builder("build_ecmwf_ifs_datacube_lake_based")
-    print(f"\nScanning ECMWF init_dates in: {ECMWF_BASE_DIR}")
-    all_init_dates = ecmwf_mod._determine_ecmwf_init_dates(
-        ECMWF_BASE_DIR, probe_var=ecmwf_mod.ERA5_RAW_VARS[0]
-    )
-    all_init_dates = all_init_dates[
-        (all_init_dates >= all_dates[0]) & (all_init_dates <= all_dates[-1])
-    ]
-    print(f"  Using {len(all_init_dates)} init_dates "
-          f"({all_init_dates[0].date()} … {all_init_dates[-1].date()})")
-    ecmwf_mod.build_ecmwf_forecast_datacube(
-        ecmwf_base_dir=ECMWF_BASE_DIR,
-        lake_ids=lake_ids,
-        all_init_dates=all_init_dates,
-        forecast_horizon=FORECAST_HORIZON,
-        save_dir=SAVE_DIR,
-    )
+    if BUILD_ECMWF:
+        ecmwf_mod = _import_builder("build_ecmwf_ifs_datacube_lake_based")
+        print(f"\nScanning ECMWF init_dates in: {ECMWF_BASE_DIR}")
+        all_init_dates = ecmwf_mod._determine_ecmwf_init_dates(
+            ECMWF_BASE_DIR, probe_var=ecmwf_mod.ERA5_RAW_VARS[0]
+        )
+        all_init_dates = all_init_dates[
+            (all_init_dates >= all_dates[0]) & (all_init_dates <= all_dates[-1])
+        ]
+        print(f"  Using {len(all_init_dates)} init_dates "
+              f"({all_init_dates[0].date()} … {all_init_dates[-1].date()})")
+        ecmwf_mod.build_ecmwf_forecast_datacube(
+            ecmwf_base_dir=ECMWF_BASE_DIR,
+            lake_ids=lake_ids,
+            all_init_dates=all_init_dates,
+            forecast_horizon=FORECAST_HORIZON,
+            save_dir=SAVE_DIR,
+        )
+    else:
+        print("\n[SKIP] ECMWF forecast datacube (BUILD_ECMWF=False)")
 
     # ── 4. Static attributes ──────────────────────────────────────────────────
-    static_mod = _import_builder("build_static_datacube_lake_based")
-    static_df = static_mod.prepare_static_attrs(
-        lake_upstream_segs_csv=LAKE_UPSTREAM_SEGS_CSV,
-        reaches_with_lakes_csv=REACHES_WITH_LAKES_CSV,
-        reach_attrs_csv=REACH_ATTRS_CSV,
-    )
-    static_mod.build_static_datacube(
-        lake_ids=lake_ids,
-        static_df=static_df,
-        save_dir=SAVE_DIR,
-        exclude_cols=STATIC_EXCLUDE_COLS,
-    )
+    if BUILD_STATIC:
+        static_mod = _import_builder("build_static_datacube_lake_based")
+        static_df = static_mod.prepare_static_attrs(
+            lake_upstream_segs_csv=LAKE_UPSTREAM_SEGS_CSV,
+            reaches_with_lakes_csv=REACHES_WITH_LAKES_CSV,
+            reach_attrs_csv=REACH_ATTRS_CSV,
+            lake_ids=lake_ids,
+        )
+        static_mod.build_static_datacube(
+            lake_ids=lake_ids,
+            static_df=static_df,
+            save_dir=SAVE_DIR,
+            exclude_cols=STATIC_EXCLUDE_COLS,
+        )
+    else:
+        print("\n[SKIP] Static attributes datacube (BUILD_STATIC=False)")
 
     print("\n=== All done ===")
