@@ -116,7 +116,7 @@ if __name__ == "__main__":
     print(f"Date range    : {all_dates[0].date()} … {all_dates[-1].date()} ({len(all_dates)} days)")
 
     # ── 1. WSE ────────────────────────────────────────────────────────────────
-    wse_mod = _import_builder("build_wse_datacube_lake_based_20260319")
+    wse_mod = _import_builder("build_wse_datacube_lake_based")
     wse_mod.build_wse_datacube(
         swot_csv=SWOT_LAKE_WSE_CSV,
         lake_ids=lake_ids,
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     )
 
     # ── 2. ERA5-Land climate ──────────────────────────────────────────────────
-    era5_mod = _import_builder("build_era5_datacube_lake_based_20260319")
+    era5_mod = _import_builder("build_era5_datacube_lake_based")
     era5_mod.build_era5_climate_datacube(
         era5_base_dir=ERA5_BASE_DIR,
         lake_ids=lake_ids,
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     )
 
     # ── 3. ECMWF IFS forecast ─────────────────────────────────────────────────
-    ecmwf_mod = _import_builder("build_ecmwf_ifs_datacube_lake_based_20260319")
+    ecmwf_mod = _import_builder("build_ecmwf_ifs_datacube_lake_based")
     print(f"\nScanning ECMWF init_dates in: {ECMWF_BASE_DIR}")
     all_init_dates = ecmwf_mod._determine_ecmwf_init_dates(
         ECMWF_BASE_DIR, probe_var=ecmwf_mod.ERA5_RAW_VARS[0]
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     )
 
     # ── 4. Static attributes ──────────────────────────────────────────────────
-    static_mod = _import_builder("build_static_datacube_lake_based_20260319")
+    static_mod = _import_builder("build_static_datacube_lake_based")
     static_df = static_mod.prepare_static_attrs(
         lake_upstream_segs_csv=LAKE_UPSTREAM_SEGS_CSV,
         reaches_with_lakes_csv=REACHES_WITH_LAKES_CSV,
