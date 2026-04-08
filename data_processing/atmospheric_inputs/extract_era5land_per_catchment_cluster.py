@@ -67,11 +67,11 @@ CATCHMENT_SHP = (
 )
 LAKE_CENTROIDS_CSV = (
     rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs/lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
-    rf"/gritv06_great_mekong_pld_lake_upstream_segments_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD} .csv"
+    rf"/gritv06_great_mekong_pld_lake_upstream_segments_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 OUTPUT_DIR = Path(
     rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs"
-    rf"/era5_land_daily_catchment_level/daily_per_lake_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}sqkm"
+    rf"/era5_land_daily_catchment_level/daily_per_lake_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 

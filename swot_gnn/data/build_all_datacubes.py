@@ -22,6 +22,10 @@ import pandas as pd
 
 from datacube_utils import load_lake_ids_from_graph
 
+
+AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
+OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lake
+
 # ─── Configuration (edit paths and parameters here) ───────────────────────────
 
 LAKE_GRAPH_CSV = Path(
@@ -47,7 +51,7 @@ WSE_OPTION = "wse_norm"   # "wse_norm" | "wse_anomaly" | "wse"
 
 # ── ERA5-Land ─────────────────────────────────────────────────────────────────
 ERA5_BASE_DIR = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land_daily_catchment_level/era5land_daily_great_mekong_per_pld_lake_0sqkm"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land_daily_catchment_level/daily_per_lake_area_{}_sample_20sqkm"
 )
 
 # ── ECMWF IFS ────────────────────────────────────────────────────────────────
