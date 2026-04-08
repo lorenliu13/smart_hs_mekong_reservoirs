@@ -1,0 +1,61 @@
+# Experiment 06: 1-day-ahead lake WSE forecasting — spatial 5-fold cross-validation
+#
+# Task:   Same model as exp05 (SWOTGNNGaussCRPS, probabilistic output) but
+#         evaluated with spatial CV via run_spatial_cv_wse1d.py instead of
+#         temporal CV.  Lakes are randomly split into 5 spatial folds; one fold
+#         is held out as the test set per run.  All lake nodes remain in the
+#         graph so GNN message passing spans the full network; spatial masks
+#         gate which nodes contribute to the loss.
+#
+# Validation strategy: --val-method spatial
+#   A fraction (spatial_val_frac) of train-fold lakes is held out as the
+#   spatial validation set using all available dates.  val_frac is unused.
+#   Pass --val-method spatial --spatial-val-frac 0.1 (or desired fraction)
+#   as CLI arguments; n_folds, fold_idx, spatial_seed are also CLI args.
+#
+# Input:  (n_lakes, 31, 21)  — identical to exp05
+#   Timesteps  0-29 : historical ERA5 + SWOT (seq_len=30)
+#              feat  0-7 : SWOT WSE block (obs_mask, latest_wse, latest_wse_u,
+#                          latest_wse_std, latest_area_total, days_since_last_obs,
+#                          doy_sin, doy_cos)
+#              feat  8-20: ERA5-Land climate (LWd, SWd, P, Pres, Temp, Td,
+#                          Wind, sf, sd, swvl1, swvl2, swvl3, swvl4)
+#   Timestep  30    : ECMWF IFS next-day forecast (forecast_horizon=1)
+#              feat  0-5 : zeroed (no SWOT observation at forecast time)
+#              feat  6-7 : doy_sin/cos for the forecast date
+#              feat  8-20: 13 ECMWF climate variables (same order as ERA5)
+#
+# Output: (n_lakes,), (n_lakes,) — normalised mean and log-std of next-day WSE
+#
+# Loss:   ObservedGaussianNLLLoss — Gaussian NLL averaged only over lakes
+#         with a SWOT observation on the forecast date (label_mask=1).
+#         During training/validation: loss gated to train-fold lakes only.
+#         During test evaluation:     loss gated to held-out test-fold lakes.
+#
+# Normalisation statistics are derived from training lakes only.
+#
+model:
+  model_type: SWOTGNNGaussCRPS     # selects SWOTGNNGauss from MODEL_REGISTRY
+  swot_dim: 8                  # obs_mask, latest_wse, latest_wse_u, latest_wse_std,
+                                # latest_area_total, days_since_last_obs, doy_sin, doy_cos
+  climate_dim: 13              # LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd, swvl1-4
+  static_embed_dim: 16
+  embed_dim: 64
+  hidden_dim: 64
+  st_blocks: 1
+  gps_layers_per_block: 2
+  gps_heads: 4
+  dropout: 0.1
+  forecast_horizon: 1          # 1-day-ahead (single scalar output per lake)
+  # static_dim is auto-detected from the datacube at runtime and injected here
+
+training:
+  seq_len: 30                  # ERA5/SWOT history window (days before init_date)
+  forecast_horizon: 1          # ECMWF lead days used as input / days predicted
+  total_seq_len: 31            # seq_len + forecast_horizon (informational)
+  # val_frac is unused with --val-method spatial; spatial_val_frac is a CLI arg
+  batch_size: 16
+  lr: 0.001
+  num_epochs: 100
+  patience: 20                 # early-stop if val loss does not improve for 20 epochs
+  grad_clip: 1.0

@@ -93,13 +93,6 @@ SWOT_DAILY_CSV = (
     rf"\swot_lake_2023_12_2026_02_daily_wse_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 
-# Load the hydrobasin watershed shapefile to assign basin ID to lakes
-HYDROBASINS_DIR = (
-    r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs"
-    r"\basin_shapefile\hydrobasins"
-)
-HYDROBASINS_LEVELS = range(1, 9)  # levels 1–8
-
 # ---------------------------------------------------------------------------
 # 1. Load PLD and derive valid lake IDs from SWOT daily WSE file
 #    (area and observation-count filters are already applied upstream)
@@ -497,47 +490,25 @@ n_basin_outlets = (result_df["downstream_lake_ids"] == str(TERMINAL_NODE_ID)).su
 print(f"Basin outlet lakes (-1):       {n_basin_outlets}")
 
 # ---------------------------------------------------------------------------
-# 10. Assign HydroBasins sub-basin ID for each lake centroid, levels 1–8
+# 10. Join HydroBasins sub-basin IDs from PLD onto result_df
 #
-# Each lake's (lon, lat) centroid is spatially joined against the HydroBasins
-# shapefile for that level. The matching HYBAS_ID is stored in a new column
-# named "hybasin_level_X". Lakes whose centroid falls outside all polygons
-# (very rare edge case) receive NaN for that level.
+# The hybasin_level_X columns are assigned in extract_lake_id_for_grit_reach.py
+# and stored in the PLD CSV (PLD_PATH). We join them here by lake_id so the
+# lake graph output also carries the sub-basin membership for each lake.
 # ---------------------------------------------------------------------------
-print("\nAssigning HydroBasins sub-basin IDs to lakes...")
-
-# Build a GeoDataFrame of lake centroids (WGS-84, same CRS as HydroBasins)
-lakes_gdf = gpd.GeoDataFrame(
-    result_df[["lake_id"]].copy(),
-    geometry=gpd.points_from_xy(result_df["lon"], result_df["lat"]),
-    crs="EPSG:4326",
-)
-
-for level in HYDROBASINS_LEVELS:
-    level_str = f"{level:02d}"
-    shp_path = Path(HYDROBASINS_DIR) / f"hybas_as_lev{level_str}_v1c_great_mekong.shp"
-    col_name = f"hybasin_level_{level}"
-
-    if not shp_path.exists():
-        print(f"  [SKIP] Level {level}: file not found at {shp_path}")
-        result_df[col_name] = pd.NA
-        continue
-
-    basins = gpd.read_file(shp_path)[["HYBAS_ID", "geometry"]]
-
-    # Spatial join: for each lake centroid find the basin polygon it falls in
-    joined = lakes_gdf.sjoin(basins, how="left", predicate="within")
-
-    # sjoin may produce duplicates if a point lies on a shared boundary;
-    # keep the first match per lake_id
-    joined = joined.drop_duplicates(subset="lake_id")
-
-    # Map HYBAS_ID back onto result_df via lake_id
-    hybas_map = joined.set_index("lake_id")["HYBAS_ID"]
-    result_df[col_name] = result_df["lake_id"].map(hybas_map)
-
-    assigned = result_df[col_name].notna().sum()
-    print(f"  Level {level}: {assigned}/{len(result_df)} lakes assigned a HYBAS_ID.")
+hybasin_cols = [c for c in pld.columns if c.startswith("hybasin_level_")]
+if hybasin_cols:
+    hybasin_df = (
+        pld.drop_duplicates("lake_id")
+        .set_index("lake_id")[hybasin_cols]
+    )
+    result_df = result_df.join(hybasin_df, on="lake_id")
+    print(f"\nJoined {len(hybasin_cols)} HydroBasins level column(s) onto result_df.")
+else:
+    print(
+        "\n[WARN] No hybasin_level_* columns found in PLD. "
+        "Run extract_lake_id_for_grit_reach.py first to generate them."
+    )
 
 # ---------------------------------------------------------------------------
 # 11. Save

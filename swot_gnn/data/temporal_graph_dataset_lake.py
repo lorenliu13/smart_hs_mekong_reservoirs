@@ -656,3 +656,333 @@ def build_temporal_dataset_from_lake_datacubes(
     )
 
     return train_ds, val_ds, test_ds, norm_stats
+
+
+def build_spatial_cv_fold(
+    wse_datacube_path: Union[str, Path],
+    era5_climate_datacube_path: Union[str, Path],
+    ecmwf_forecast_datacube_path: Union[str, Path],
+    static_datacube_path: Union[str, Path],
+    lake_graph_path: Union[str, Path],
+    n_folds: int = 5,
+    fold_idx: int = 0,
+    spatial_split_seed: int = 42,
+    seq_len: int = 30,
+    forecast_horizon: int = 10,
+    val_frac: float = 0.15,
+    val_method: str = "temporal",
+    spatial_val_frac: float = 0.1,
+    require_obs_on_any_forecast_day: bool = True,
+) -> Tuple[
+    "TemporalGraphDatasetLake",
+    "TemporalGraphDatasetLake",
+    "TemporalGraphDatasetLake",
+    Dict,
+]:
+    """
+    Build train / val / test datasets for one fold of random spatial cross-validation.
+
+    Lake split (spatial axis):
+        Lakes are randomly shuffled with `spatial_split_seed`, then divided into
+        `n_folds` equal-sized groups.  The group at position `fold_idx` becomes the
+        held-out test set; the remaining (n_folds - 1) / n_folds lakes form the
+        train / val pool.
+
+    Validation strategy (controlled by `val_method`):
+
+        ``"temporal"`` (default):
+            The full time series of train-fold lakes is split chronologically.
+            The last ``val_frac`` fraction of valid init_dates forms the val set;
+            the rest forms the training set.  Both sets use the same lake mask
+            (all train-fold lakes).
+
+        ``"spatial"``:
+            All valid init_dates are used for both training and validation.
+            A random ``spatial_val_frac`` fraction of the train-fold lakes is
+            held out as a spatial validation set.  Training loss is gated to the
+            remaining train-train lakes; validation loss is gated to the val lakes.
+            Use this mode when you want to train on the complete time series.
+
+    Graph structure:
+        ALL lakes remain as nodes in the graph for every dataset so that message
+        passing can propagate information across the full network topology.
+        The ``spatial_train_mask`` attribute on each returned dataset tells
+        ``_run_epoch`` which nodes contribute to the loss for that dataset.
+
+    Normalization (no leakage):
+        Dynamic feature z-score statistics are computed exclusively from the
+        lakes that contribute to the training loss (train-train lakes for spatial
+        val, all train-fold lakes for temporal val), using all ERA5 dates.
+        Static feature statistics follow the same rule.  Both are then applied
+        to all lakes uniformly.
+
+    Args:
+        wse_datacube_path:            Path to swot_lake_wse_datacube_*.nc
+        era5_climate_datacube_path:   Path to swot_lake_era5_climate_datacube.nc
+        ecmwf_forecast_datacube_path: Path to swot_lake_ecmwf_forecast_datacube.nc
+        static_datacube_path:         Path to swot_lake_static_datacube.nc
+        lake_graph_path:              Path to GRIT PLD lake graph CSV
+        n_folds:                      Total number of spatial folds (default 5)
+        fold_idx:                     Which fold to use as the test set (0-indexed)
+        spatial_split_seed:           RNG seed for the lake shuffle
+        seq_len:                      ERA5 history window length (default 30)
+        forecast_horizon:             ECMWF forecast window (default 10)
+        val_frac:                     Fraction of init_dates held back for val
+                                      (only used when val_method="temporal")
+        val_method:                   ``"temporal"`` or ``"spatial"`` — see above
+        spatial_val_frac:             Fraction of train-fold lakes used as the
+                                      spatial val set (only when val_method="spatial")
+        require_obs_on_any_forecast_day: Skip init_dates with no SWOT observation in
+                                         any forecast day
+
+    Returns:
+        (train_ds, val_ds, test_ds, norm_stats)
+
+        Each dataset has two extra attributes set after construction:
+            spatial_train_mask : (n_lakes,) float32 tensor — 1 for this dataset's
+                                 training / val lakes (loss-active nodes)
+            spatial_test_mask  : (n_lakes,) float32 tensor — 1 for held-out test lakes
+
+        Pass ``spatial_mask=ds.spatial_train_mask`` to ``_run_epoch`` for train/val
+        passes, and ``spatial_mask=ds.spatial_test_mask`` for the final test evaluation.
+
+        norm_stats keys: log1p_dynamic_indices, zscore_dynamic_indices,
+                         dynamic_mean, dynamic_std, static_mean, static_std
+    """
+    if not 0 <= fold_idx < n_folds:
+        raise ValueError(f"fold_idx must be in [0, {n_folds - 1}], got {fold_idx}")
+
+    # ── Load all arrays from datacubes ────────────────────────────────────────
+    (
+        era5_dynamic,
+        ecmwf_forecast,
+        static_features,
+        wse_labels,
+        obs_mask,
+        lake_ids_out,
+        era5_dates,
+        ecmwf_init_dates,
+    ) = assemble_lake_features_from_datacubes(
+        wse_datacube_path=wse_datacube_path,
+        era5_climate_datacube_path=era5_climate_datacube_path,
+        ecmwf_forecast_datacube_path=ecmwf_forecast_datacube_path,
+        static_datacube_path=static_datacube_path,
+    )
+
+    n_lakes_total = len(lake_ids_out)
+
+    # ── Build lake graph ──────────────────────────────────────────────────────
+    edge_index, _, _, _ = build_graph_from_lake_graph(
+        lake_graph_csv=lake_graph_path,
+        lake_ids=lake_ids_out,
+    )
+
+    # ── Random spatial fold assignment ────────────────────────────────────────
+    # Shuffle lake array positions (not IDs) with the fixed seed, then chunk
+    # into n_folds groups.  fold_idx picks the test chunk; all others are train.
+    rng = np.random.default_rng(spatial_split_seed)
+    shuffled_positions = rng.permutation(n_lakes_total)   # positions in lake_ids_out
+
+    # np.array_split produces n_folds chunks of as-equal-as-possible size
+    fold_chunks = np.array_split(shuffled_positions, n_folds)
+    test_positions  = fold_chunks[fold_idx]               # array positions → test
+    train_positions = np.concatenate(
+        [fold_chunks[i] for i in range(n_folds) if i != fold_idx]
+    )
+
+    print(
+        f"Spatial CV fold {fold_idx}/{n_folds}: "
+        f"{len(train_positions)} train lakes / {len(test_positions)} test lakes "
+        f"(seed={spatial_split_seed})"
+    )
+
+    # ── Find all valid init_date positions ────────────────────────────────────
+    era5_date_to_idx = {d: i for i, d in enumerate(era5_dates)}
+
+    all_valid = []
+    for j, init_date in enumerate(ecmwf_init_dates):
+        last_hist_day = init_date - pd.Timedelta(days=1)
+        era5_idx = era5_date_to_idx.get(last_hist_day)
+        if era5_idx is None or era5_idx < seq_len - 1:
+            continue
+
+        if require_obs_on_any_forecast_day:
+            has_obs = False
+            for d in range(forecast_horizon):
+                target_date = init_date + pd.Timedelta(days=d)
+                t_idx = era5_date_to_idx.get(target_date)
+                if t_idx is not None and obs_mask[:, t_idx].sum() > 0:
+                    has_obs = True
+                    break
+            if not has_obs:
+                continue
+
+        all_valid.append(j)
+
+    all_valid = np.array(all_valid, dtype=np.int64)
+    n_valid   = len(all_valid)
+
+    if n_valid == 0:
+        raise ValueError(
+            "No valid init_dates found. Check that ERA5 and ECMWF date ranges overlap "
+            "and that SWOT WSE observations exist within the forecast windows."
+        )
+
+    # ── Val strategy: determine init_date indices and per-dataset lake masks ─────
+    if val_method == "temporal":
+        # All train-fold lakes, last val_frac of dates reserved for val.
+        val_start  = int(n_valid * (1.0 - val_frac))
+        train_idx  = all_valid[:val_start]
+        val_idx    = all_valid[val_start:]
+        test_idx   = all_valid
+
+        # Normalization source: all train-fold lakes, all ERA5 dates
+        norm_positions = train_positions
+
+        # Spatial masks: train and val share the same lake set
+        train_active_positions = train_positions
+        val_active_positions   = train_positions
+
+        print(
+            f"  Val method: temporal — "
+            f"{len(train_idx)} train dates / {len(val_idx)} val dates "
+            f"({len(train_positions)} lakes each)"
+        )
+
+    elif val_method == "spatial":
+        # All dates for every dataset; a random subset of train-fold lakes is
+        # held out as the spatial validation set.
+        train_idx = all_valid
+        val_idx   = all_valid
+        test_idx  = all_valid
+
+        rng_val = np.random.default_rng(spatial_split_seed + 1)
+        n_spatial_val  = max(1, int(len(train_positions) * spatial_val_frac))
+        perm           = rng_val.permutation(len(train_positions))
+        val_active_positions   = train_positions[perm[:n_spatial_val]]
+        train_active_positions = train_positions[perm[n_spatial_val:]]
+
+        # Normalization source: train-train lakes only (no val or test lake leakage)
+        norm_positions = train_active_positions
+
+        print(
+            f"  Val method: spatial — all {n_valid} dates used for training | "
+            f"{len(train_active_positions)} train-train lakes / "
+            f"{len(val_active_positions)} spatial-val lakes"
+        )
+
+    else:
+        raise ValueError(f"val_method must be 'temporal' or 'spatial', got '{val_method}'")
+
+    # ── Feature normalization ─────────────────────────────────────────────────
+    # Statistics are derived from `norm_positions` lakes only (no leakage into
+    # val or test lakes).  All ERA5 dates are included.
+    _LOG1P_DYN  = [5, 10, 15]
+    _ZSCORE_DYN = [2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+    era5_dynamic   = era5_dynamic.copy()
+    ecmwf_forecast = ecmwf_forecast.copy()
+
+    # Step 1: log1p on skewed features (all lakes, all dates)
+    for i in _LOG1P_DYN:
+        era5_dynamic[:, :, i] = np.log1p(np.clip(era5_dynamic[:, :, i], 0, None))
+
+    # Step 2: z-score statistics from norm_positions lakes only
+    norm_era5_slice = era5_dynamic[norm_positions, :, :]  # (n_norm_lakes, n_dates, 21)
+
+    n_dyn    = era5_dynamic.shape[-1]
+    dyn_mean = np.zeros(n_dyn, dtype=np.float32)
+    dyn_std  = np.ones(n_dyn,  dtype=np.float32)
+
+    for i in _ZSCORE_DYN:
+        vals        = norm_era5_slice[:, :, i].ravel()
+        dyn_mean[i] = float(vals.mean())
+        dyn_std[i]  = float(vals.std()) + 1e-8
+
+    # Step 3: apply z-score to all ERA5 dates and all lakes
+    for i in _ZSCORE_DYN:
+        era5_dynamic[:, :, i] = (era5_dynamic[:, :, i] - dyn_mean[i]) / dyn_std[i]
+
+    # Step 4: apply identical normalization to ECMWF climate features
+    ecmwf_log1p_indices  = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _LOG1P_DYN]
+    ecmwf_zscore_indices = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _ZSCORE_DYN]
+
+    for k in ecmwf_log1p_indices:
+        ecmwf_forecast[:, :, :, k] = np.log1p(np.clip(ecmwf_forecast[:, :, :, k], 0, None))
+
+    for k in ecmwf_zscore_indices:
+        era5_idx = SWOT_DIM + k
+        ecmwf_forecast[:, :, :, k] = (
+            ecmwf_forecast[:, :, :, k] - dyn_mean[era5_idx]
+        ) / dyn_std[era5_idx]
+
+    # Step 5: z-score static features from norm_positions lakes only
+    stat_mean = static_features[norm_positions, :].mean(axis=0).astype(np.float32)
+    stat_std  = static_features[norm_positions, :].std(axis=0).astype(np.float32) + 1e-8
+    static_features = (static_features - stat_mean) / stat_std
+
+    norm_stats: Dict = {
+        "log1p_dynamic_indices":  _LOG1P_DYN,
+        "zscore_dynamic_indices": _ZSCORE_DYN,
+        "dynamic_mean":  dyn_mean,
+        "dynamic_std":   dyn_std,
+        "static_mean":   stat_mean,
+        "static_std":    stat_std,
+        "val_method":          val_method,
+        "n_folds":             n_folds,
+        "fold_idx":            fold_idx,
+        "spatial_split_seed":  spatial_split_seed,
+        "n_train_lakes":       len(train_active_positions),
+        "n_val_lakes":         len(val_active_positions),
+        "n_test_lakes":        len(test_positions),
+    }
+
+    # ── Construct three datasets sharing the same normalized arrays ───────────
+    # All three use the full graph (all lakes as nodes) so message passing is
+    # unaffected by the spatial split.
+    shared_kwargs = dict(
+        era5_dynamic=era5_dynamic,
+        ecmwf_forecast=ecmwf_forecast,
+        static_features=static_features,
+        edge_index=edge_index,
+        era5_dates=era5_dates,
+        ecmwf_init_dates=ecmwf_init_dates,
+        wse_labels=wse_labels,
+        obs_mask=obs_mask,
+        lake_ids=lake_ids_out,
+        seq_len=seq_len,
+        forecast_horizon=forecast_horizon,
+    )
+    train_ds = TemporalGraphDatasetLake(**shared_kwargs, indices=train_idx)
+    val_ds   = TemporalGraphDatasetLake(**shared_kwargs, indices=val_idx)
+    test_ds  = TemporalGraphDatasetLake(**shared_kwargs, indices=test_idx)
+
+    # Build per-dataset spatial masks (1 = active node for loss, 0 = silent node).
+    # train_ds and val_ds may differ when val_method="spatial".
+    def _make_mask(positions: np.ndarray) -> torch.Tensor:
+        m = np.zeros(n_lakes_total, dtype=np.float32)
+        m[positions] = 1.0
+        return torch.from_numpy(m)
+
+    train_mask_t = _make_mask(train_active_positions)
+    val_mask_t   = _make_mask(val_active_positions)
+    test_mask_t  = _make_mask(test_positions)
+
+    # spatial_train_mask: the mask to pass to _run_epoch for this dataset's role.
+    # spatial_test_mask:  always the held-out test lake mask (same for all datasets).
+    train_ds.spatial_train_mask = train_mask_t
+    train_ds.spatial_test_mask  = test_mask_t
+
+    val_ds.spatial_train_mask   = val_mask_t    # val lakes (may differ from train_mask_t)
+    val_ds.spatial_test_mask    = test_mask_t
+
+    test_ds.spatial_train_mask  = train_mask_t  # not typically used, but included for completeness
+    test_ds.spatial_test_mask   = test_mask_t
+
+    print(
+        f"Spatial CV datasets built: "
+        f"{len(train_ds)} train / {len(val_ds)} val samples | "
+        f"{len(test_ds)} test samples ({len(test_positions)} held-out lakes, all dates)"
+    )
+
+    return train_ds, val_ds, test_ds, norm_stats

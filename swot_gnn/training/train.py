@@ -131,6 +131,7 @@ def _run_epoch(
     device: torch.device,
     optimizer=None,
     grad_clip: float = 1.0,
+    spatial_mask: torch.Tensor = None,
 ) -> float:
     """Run one forward pass over `loader` using true batching.
 
@@ -140,6 +141,12 @@ def _run_epoch(
 
     When `optimizer` is provided (training mode) the function back-propagates
     and steps the optimiser.  Without it the function runs in eval / no-grad mode.
+
+    Args:
+        spatial_mask: Optional (n_lakes,) float tensor with 1 for active lakes and 0
+            for held-out lakes. When provided (spatial cross-validation), the loss is
+            computed only where both SWOT observation mask AND spatial_mask are 1.
+            All lake nodes still participate in message passing regardless of this mask.
 
     Returns the mean per-batch loss over the full loader.
     """
@@ -172,6 +179,13 @@ def _run_epoch(
             static_batch = static_feats.reshape(B * n_lakes, -1).to(device)
             lab          = labels.reshape(B * n_lakes).to(device)   # (B*N,) — flat 1-D
             msk          = masks.reshape(B * n_lakes).to(device)    # (B*N,) — flat 1-D
+
+            # Apply spatial mask: tile (n_lakes,) → (B*n_lakes,) and AND with obs mask.
+            # Message passing uses all nodes; only the loss is gated by this mask.
+            if spatial_mask is not None:
+                sm  = spatial_mask.to(device).float()                  # (n_lakes,)
+                sm  = sm.unsqueeze(0).expand(B, -1).reshape(-1)        # (B*n_lakes,)
+                msk = msk * sm
 
             if is_train:
                 optimizer.zero_grad()
