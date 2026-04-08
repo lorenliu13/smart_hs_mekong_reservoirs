@@ -29,12 +29,12 @@ OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lak
 # ─── Configuration (edit paths and parameters here) ───────────────────────────
 
 LAKE_GRAPH_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    "/gritv06_great_mekong_pld_lake_graph_0sqkm.csv"
+    f"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs/lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+    f"/gritv06_great_mekong_pld_lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 SAVE_DIR = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data"
-    "/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc"
+    "/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc_area{AREA_THRESHOLD_SQKM}_obs{OBS_COUNT_THRESHOLD}"
 )
 
 # Date range — applies to WSE, ERA5, and ECMWF (static has no time axis).
@@ -51,12 +51,12 @@ WSE_OPTION = "wse_norm"   # "wse_norm" | "wse_anomaly" | "wse"
 
 # ── ERA5-Land ─────────────────────────────────────────────────────────────────
 ERA5_BASE_DIR = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land_daily_catchment_level/daily_per_lake_area_{}_sample_20sqkm"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/era5_land_daily_catchment_level/daily_per_lake_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
 )
 
 # ── ECMWF IFS ────────────────────────────────────────────────────────────────
 ECMWF_BASE_DIR = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily_catchment_level/hres/ecmwf_ifs_daily_great_mekong_per_pld_lake_0sqkm"
+    "/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily_catchment_level/hres/daily_per_lake_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
 )
 FORECAST_HORIZON = 10
 
