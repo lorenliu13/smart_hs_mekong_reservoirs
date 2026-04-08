@@ -60,7 +60,7 @@ def _determine_ecmwf_init_dates(ecmwf_base_dir: Path, probe_var: str = "tp") -> 
     monthly_files = sorted(var_dir.glob(f"ecmwf_per_lake_{probe_var}_????-??.csv"))
     if not monthly_files:
         raise FileNotFoundError(f"No ECMWF monthly files found in {var_dir}")
-    df = pd.concat([pd.read_csv(f, usecols=["init_date"]) for f in monthly_files])
+    df = pd.concat([pd.read_csv(f, usecols=["init_date"]) for f in monthly_files], ignore_index=True)
     dates = pd.to_datetime(df["init_date"], errors="coerce").dt.normalize().dropna().unique()
     return pd.DatetimeIndex(sorted(dates))
 
