@@ -77,6 +77,8 @@ def build_swot_wse_arrays(
     swot_df = pd.read_csv(swot_csv)
     swot_df["date"] = pd.to_datetime(swot_df["date"])
     swot_df["lake_id"] = swot_df["lake_id"].astype(np.int64)
+    # only keep the lakes that are in the lake graph (and thus in the other datacubes)
+    swot_df = swot_df[swot_df["lake_id"].isin(lake_ids)]
 
     # ── Compute per-lake normalization statistics ────────────────────────────
     grp = swot_df.groupby("lake_id")["wse"]

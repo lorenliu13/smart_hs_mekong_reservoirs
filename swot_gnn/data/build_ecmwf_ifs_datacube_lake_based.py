@@ -99,6 +99,8 @@ def load_ecmwf_climate_arrays(
         df["lake_id"]   = pd.to_numeric(df["lake_id"], errors="coerce")
         df = df.dropna(subset=["init_date", "lake_id"])
         df["lake_id"]   = df["lake_id"].astype(np.int64)
+        # only keep the lakes that are in the lake graph (and thus in the other datacubes)
+        df = df[df["lake_id"].isin(set(lake_ids.tolist()))]
 
         pivot = (
             df.pivot_table(index="lake_id", columns=["init_date", "forecast_day"], values=var, aggfunc="first")

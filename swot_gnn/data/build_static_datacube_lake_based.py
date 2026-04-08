@@ -80,6 +80,7 @@ def prepare_static_attrs(
     lake_upstream_segs_csv: Path,
     reaches_with_lakes_csv: Path,
     reach_attrs_csv: Path,
+    lake_ids: np.ndarray,
 ) -> pd.DataFrame:
     """
     Aggregate reach-level predictor attributes to per-lake static attributes.
@@ -111,6 +112,8 @@ def prepare_static_attrs(
 
     print("  Loading lake upstream-segment table …")
     lake_upstream = pd.read_csv(lake_upstream_segs_csv)
+    # only keep the lakes that are in the lake graph (and thus in the other datacubes)
+    lake_upstream = lake_upstream[lake_upstream["lake_id"].isin(lake_ids)]
     print(f"    {len(lake_upstream)} lakes")
 
     records = []
@@ -216,6 +219,7 @@ if __name__ == "__main__":
         lake_upstream_segs_csv=LAKE_UPSTREAM_SEGS_CSV,
         reaches_with_lakes_csv=REACHES_WITH_LAKES_CSV,
         reach_attrs_csv=REACH_ATTRS_CSV,
+        lake_ids=lake_ids,
     )
 
     build_static_datacube(

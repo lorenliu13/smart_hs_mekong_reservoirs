@@ -95,6 +95,7 @@ def load_era5_climate_arrays(
             continue
 
         combined = pd.concat(frames, ignore_index=True)
+        # only keep the lakes that are in the lake graph (and thus in the other datacubes)
         combined = combined[
             combined["lake_id"].isin(lake_id_set) &
             combined["date"].isin(all_dates_set)

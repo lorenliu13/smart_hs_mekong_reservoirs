@@ -45,7 +45,7 @@ END_MONTH   = "2026-02"
 # ── WSE ───────────────────────────────────────────────────────────────────────
 SWOT_LAKE_WSE_CSV = Path(
     "/data/ouce-grit/cenv1160/smart_hs/processed_data/swot/great_mekong_river_basin/lakes_daily"
-    "/swot_lake_2023_12_2026_02_daily_wse_xtrk10_60km_dark50pct_qf01_daily_final.csv"
+    f"/swot_lake_2023_12_2026_02_daily_wse_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 WSE_OPTION = "wse_norm"   # "wse_norm" | "wse_anomaly" | "wse"
 
