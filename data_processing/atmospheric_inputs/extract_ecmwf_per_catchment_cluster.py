@@ -61,27 +61,28 @@ from shapely.geometry import box
 
 warnings.filterwarnings("ignore")
 
-LAKE_AREA_THRESHOLD_SQKM = 0
+AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
+OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lake
 
 # ---------------------------------------------------------------------------
 # Configuration — HPC cluster paths
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(r"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/ecmwf_ifs_daily/hres")
 CATCHMENT_SHP = (
-    r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    rf"/gritv06_great_mekong_pld_lake_catchments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.shp"
+    rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs/lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+    rf"/gritv06_great_mekong_pld_lake_catchments_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.shp"
 )
 LAKE_CENTROIDS_CSV = (
-    r"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    rf"/gritv06_great_mekong_pld_lake_upstream_segments_{LAKE_AREA_THRESHOLD_SQKM}sqkm.csv"
+    rf"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs/lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+    rf"/gritv06_great_mekong_pld_lake_upstream_segments_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 OUTPUT_DIR = Path(
     rf"/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs"
-    rf"/ecmwf_ifs_daily_catchment_level/hres/ecmwf_ifs_daily_great_mekong_per_pld_lake_{LAKE_AREA_THRESHOLD_SQKM}sqkm"
+    rf"/ecmwf_ifs_daily_catchment_level/hres/daily_per_lake_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}sqkm"
 )
 WEIGHTS_CACHE = ""   # path to a .pkl file to cache/load spatial weights; "" = no cache
 
-START_YEAR  = 2026
+START_YEAR  = 2023
 START_MONTH = 1
 END_YEAR    = 2026
 END_MONTH   = 2
