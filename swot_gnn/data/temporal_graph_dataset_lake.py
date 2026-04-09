@@ -791,7 +791,7 @@ def build_spatial_cv_fold(
     )
 
     print(
-        f"Spatial CV fold {fold_idx}/{n_folds}: "
+        f"Spatial CV fold {fold_idx + 1}/{n_folds}: "
         f"{len(train_positions)} train lakes / {len(test_positions)} test lakes "
         f"(seed={spatial_split_seed})"
     )
@@ -866,9 +866,9 @@ def build_spatial_cv_fold(
         norm_positions = train_active_positions
 
         print(
-            f"  Val method: spatial — all {n_valid} dates used for training | "
-            f"{len(train_active_positions)} train-train lakes / "
-            f"{len(val_active_positions)} spatial-val lakes"
+            f"  Val method: spatial — {n_valid} total dates | "
+            f"{len(train_active_positions)} train lakes / "
+            f"{len(val_active_positions)} val lakes"
         )
 
     else:
@@ -981,8 +981,10 @@ def build_spatial_cv_fold(
 
     print(
         f"Spatial CV datasets built: "
-        f"{len(train_ds)} train / {len(val_ds)} val samples | "
-        f"{len(test_ds)} test samples ({len(test_positions)} held-out lakes, all dates)"
+        f"{len(train_ds)} samples each (all dates) | "
+        f"{len(train_active_positions)} train lakes / "
+        f"{len(val_active_positions)} val lakes / "
+        f"{len(test_positions)} test lakes"
     )
 
     return train_ds, val_ds, test_ds, norm_stats
