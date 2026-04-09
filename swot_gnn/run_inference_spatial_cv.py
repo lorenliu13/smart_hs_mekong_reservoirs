@@ -162,6 +162,16 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
         pred_std_norm (NaN for deterministic / point models), is_test_lake
 
     is_test_lake is True for spatially held-out test lakes, False for train lakes.
+
+    Inputs: 
+        ds: TemporalGraphDatasetLake with spatial masks (train_ds, val_ds, test_ds from build_spatial_cv_fold)
+        model: trained PyTorch model for inference
+        device: torch device to run inference on
+        test_lake_ids: set of lake IDs that are in the spatially held-out test set (derived from ds.spatial_mask)
+        split_name: string label for the dataset split (e.g. 'train', 'val', 'test') used for logging purposes
+
+    Outputs:
+        DataFrame with columns: lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm, pred_std_norm, is_test_lake
     """
     records = []
     model.eval()
@@ -392,7 +402,7 @@ def main():
           f'{norm_stats["n_train_lakes"]} train lakes)')
 
     # Derive the set of held-out test lake IDs from the spatial mask
-    test_mask_np    = test_ds.spatial_mask.numpy()  # (n_lakes,)
+    test_mask_np    = test_ds.spatial_mask.numpy()  # (n_lakes,) 1 for test lake, 0 for train lake
     test_lake_ids   = set(int(lid) for lid, m in zip(test_ds.lake_ids, test_mask_np) if m > 0)
     print(f'Test lake IDs resolved: {len(test_lake_ids)} lakes')
 
@@ -417,9 +427,50 @@ def main():
 
     # ── Run inference on all splits ───────────────────────────────────────────
     print("\nRunning inference ...")
-    train_raw = run_inference(train_ds, model, device, test_lake_ids, "train")
-    val_raw   = run_inference(val_ds,   model, device, test_lake_ids, "val")
-    test_raw  = run_inference(test_ds,  model, device, test_lake_ids, "test")
+    # All three datasets share the same full lake graph.  test_ds always covers
+    # the full date range regardless of val_method, so running inference once on
+    # test_ds is sufficient.  Rows are then partitioned into train/val/test
+    # without re-running the model.
+    full_raw = run_inference(test_ds, model, device, test_lake_ids, "all")
+
+    # Build lake_id → spatial group from the three spatial_mask tensors.
+    # For val_method="spatial": each lake belongs to exactly one of train/val/test.
+    # For val_method="temporal": train_mask == val_mask (same train-fold lakes),
+    #   so all train-fold lakes map to 'train_fold' here; date decides train vs val.
+    val_mask_np_ = val_ds.spatial_mask.numpy()
+    lake_to_group: dict[int, str] = {}
+    for lake_i, lake_id in enumerate(test_ds.lake_ids):
+        lid = int(lake_id)
+        if test_mask_np[lake_i] > 0:
+            lake_to_group[lid] = 'test'
+        elif val_mask_np_[lake_i] > 0:
+            lake_to_group[lid] = 'val'
+        else:
+            lake_to_group[lid] = 'train'
+
+    if args.val_method == "temporal":
+        # train-fold lakes (currently labelled 'train' or 'val' identically above)
+        # are split by init_date: dates in train_ds.valid_starts → 'train', else → 'val'.
+        train_init_dates = {
+            pd.Timestamp(test_ds.ecmwf_init_dates[j]) for j in train_ds.valid_starts
+        }
+
+        def _assign_split(row) -> str:
+            grp = lake_to_group[row['lake_id']]
+            if grp == 'test':
+                return 'test'
+            return 'train' if row['init_date'] in train_init_dates else 'val'
+
+        full_raw['_split'] = full_raw.apply(_assign_split, axis=1)
+    else:
+        # spatial: lake_to_group already assigns each lake to one split
+        full_raw['_split'] = full_raw['lake_id'].map(lake_to_group)
+
+    train_raw = full_raw[full_raw['_split'] == 'train'].drop(columns='_split').copy()
+    val_raw   = full_raw[full_raw['_split'] == 'val'].drop(columns='_split').copy()
+    test_raw  = full_raw[full_raw['_split'] == 'test'].drop(columns='_split').copy()
+    print(f'  Partitioned: {len(train_raw)} train rows | '
+          f'{len(val_raw)} val rows | {len(test_raw)} test rows')
     print()
 
     # ── Denormalize ───────────────────────────────────────────────────────────
@@ -447,59 +498,37 @@ def main():
     print(f"Result CSVs saved to {run_dir}/")
     print(f"  train: {len(train_df)} rows | val: {len(val_df)} | test: {len(test_df)}\n")
 
-    # ── Per-lake metrics — test lakes only ────────────────────────────────────
-    # Compute metrics on the held-out test lakes only, using each split and
-    # combined views.  is_test_lake filters to the spatially held-out lakes.
-    def _filter_test(df: pd.DataFrame) -> pd.DataFrame:
-        return df[df['is_test_lake']].copy()
+    # ── Per-lake metrics — train / val / test lakes ───────────────────────────
+    # Each result DataFrame already contains rows for exactly its lake group, so
+    # compute_lake_metrics can be applied directly to each without filtering.
+    lake_metrics_train_df = compute_lake_metrics(train_df)
+    lake_metrics_val_df   = compute_lake_metrics(val_df)
+    lake_metrics_test_df  = compute_lake_metrics(test_df)
 
-    # Dedup keys: same (lake, init_date, lead_day) can appear in multiple splits
-    # when val_method="spatial" (all three datasets share the same date range) or
-    # in temporal mode (test_idx = all_valid overlaps both train and val ranges).
-    _DEDUP_KEYS = ["lake_id", "init_date", "lead_day"]
-
-    test_only_from_test   = _filter_test(test_df)
-    test_only_from_val    = _filter_test(val_df)
-    test_only_full        = (
-        _filter_test(pd.concat([train_df, val_df, test_df], ignore_index=True))
-        .drop_duplicates(subset=_DEDUP_KEYS)
-        .reset_index(drop=True)
-    )
-    val_test_combined     = (
-        _filter_test(pd.concat([val_df, test_df], ignore_index=True))
-        .drop_duplicates(subset=_DEDUP_KEYS)
-        .reset_index(drop=True)
-    )
-
-    lake_metrics_test_df     = compute_lake_metrics(test_only_from_test)
-    lake_metrics_val_test_df = compute_lake_metrics(val_test_combined)
-    lake_metrics_full_df     = compute_lake_metrics(test_only_full)
-
-    lake_metrics_test_df.to_csv(run_dir     / "lake_metrics_test.csv",     index=False)
-    lake_metrics_val_test_df.to_csv(run_dir / "lake_metrics_val_test.csv", index=False)
-    lake_metrics_full_df.to_csv(run_dir     / "lake_metrics_full.csv",     index=False)
-    val_mode_note = "(all dates — same as test for spatial val)" if args.val_method == "spatial" else "(val+test date range)"
-    print(f'Per-lake metrics saved (test lakes only, {len(lake_metrics_test_df)} lakes):')
-    print(f'  -> {run_dir}/lake_metrics_test.csv       (test split, test lakes)')
-    print(f'  -> {run_dir}/lake_metrics_val_test.csv   {val_mode_note}, test lakes)')
-    print(f'  -> {run_dir}/lake_metrics_full.csv       (all splits deduped, test lakes)')
+    lake_metrics_train_df.to_csv(run_dir / "lake_metrics_train.csv", index=False)
+    lake_metrics_val_df.to_csv(run_dir   / "lake_metrics_val.csv",   index=False)
+    lake_metrics_test_df.to_csv(run_dir  / "lake_metrics_test.csv",  index=False)
+    print(f'Per-lake metrics saved:')
+    print(f'  -> {run_dir}/lake_metrics_train.csv  ({len(lake_metrics_train_df)} train lakes)')
+    print(f'  -> {run_dir}/lake_metrics_val.csv    ({len(lake_metrics_val_df)} val lakes)')
+    print(f'  -> {run_dir}/lake_metrics_test.csv   ({len(lake_metrics_test_df)} test lakes)')
 
     # ── Median summary with 5th-95th percentile CI ────────────────────────────
     metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr',
                    'crps_m', 'cov90', 'piw90_m']
 
-    def _print_summary(label, mdf):
+    def _print_summary(label: str, mdf: pd.DataFrame) -> None:
         cols = [c for c in metric_cols if c in mdf.columns]
-        print(f'\n=== {label} — Median Per-Lake Metrics (5th–95th CI) [test lakes only] ===')
+        print(f'\n=== {label} — Median Per-Lake Metrics (5th–95th CI) ===')
         for col in cols:
             med = mdf[col].median()
             lo  = mdf[col].quantile(0.05)
             hi  = mdf[col].quantile(0.95)
             print(f'  {col:<12}: {med:6.3f}  ({lo:.3f} – {hi:.3f})')
 
-    _print_summary("Test split",      lake_metrics_test_df)
-    _print_summary("Val + Test",      lake_metrics_val_test_df)
-    _print_summary("Full record",     lake_metrics_full_df)
+    _print_summary("Train lakes", lake_metrics_train_df)
+    _print_summary("Val lakes",   lake_metrics_val_df)
+    _print_summary("Test lakes",  lake_metrics_test_df)
 
 
 if __name__ == "__main__":
