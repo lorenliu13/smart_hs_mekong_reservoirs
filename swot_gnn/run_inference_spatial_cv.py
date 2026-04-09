@@ -5,10 +5,10 @@ Mirrors run_inference_lake.py but for checkpoints produced by
 run_spatial_cv_wse1d.py.  Key differences:
 
   - Datasets are rebuilt with build_spatial_cv_fold (same fold / seed args
-    as training) so the spatial train / test masks are available.
+    as training) so the spatial masks are available.
   - Inference is run on all three splits (train, val, test).  Every row is
     tagged with a boolean `is_test_lake` column derived from the fold's
-    spatial_test_mask.
+    spatial_mask.
   - Per-lake metrics (physical units) are computed ONLY for held-out test
     lakes.  The full result CSVs are saved for all lakes / all splits.
 
@@ -338,6 +338,26 @@ def main():
     run_dir  = Path(args.save_dir) / args.run_name
     cfg_path = run_dir / "run_config.yaml"
 
+    print(f"Resolved run directory: {run_dir}")
+
+    if not run_dir.exists():
+        raise FileNotFoundError(
+            f"Run directory not found: {run_dir}\n"
+            f"Check that --run-name, --fold-idx, --n-folds, --spatial-seed, "
+            f"--val-method, --spatial-val-frac, and --seed all match the training run.\n"
+            f"Expected slug: {args.run_name}"
+        )
+    if not cfg_path.exists():
+        # List what IS in the directory to help diagnose
+        existing = sorted(run_dir.iterdir())
+        existing_str = "\n  ".join(p.name for p in existing) or "(empty)"
+        raise FileNotFoundError(
+            f"run_config.yaml not found in {run_dir}\n"
+            f"Training may not have completed — run_config.yaml is written at the "
+            f"very end of training.\n"
+            f"Files present in run_dir:\n  {existing_str}"
+        )
+
     # ── Load run config saved during training ─────────────────────────────────
     with open(cfg_path) as f:
         run_config = yaml.safe_load(f)
@@ -371,8 +391,8 @@ def main():
           f'({norm_stats["n_test_lakes"]} test lakes / '
           f'{norm_stats["n_train_lakes"]} train lakes)')
 
-    # Derive the set of held-out test lake IDs from the spatial_test_mask
-    test_mask_np    = test_ds.spatial_test_mask.numpy()  # (n_lakes,)
+    # Derive the set of held-out test lake IDs from the spatial mask
+    test_mask_np    = test_ds.spatial_mask.numpy()  # (n_lakes,)
     test_lake_ids   = set(int(lid) for lid, m in zip(test_ds.lake_ids, test_mask_np) if m > 0)
     print(f'Test lake IDs resolved: {len(test_lake_ids)} lakes')
 

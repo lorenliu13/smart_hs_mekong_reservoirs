@@ -145,39 +145,44 @@ def assemble_lake_features_from_datacubes(
         dates_out:            DatetimeIndex
         ecmwf_init_dates_out: DatetimeIndex
     """
+    # Open all four datacubes. Caller is responsible for closing them after use.
     ds_wse    = xr.open_dataset(wse_datacube_path)
     ds_era5   = xr.open_dataset(era5_climate_datacube_path)
     ds_ecmwf  = xr.open_dataset(ecmwf_forecast_datacube_path)
     ds_static = xr.open_dataset(static_datacube_path)
 
     try:
-        # Lake IDs: intersection of all four cubes, then subset if requested
+        # Get the intersection of lake IDs across all datacubes to ensure alignment. The graph construction
         all_cube_lakes = np.intersect1d(
             np.intersect1d(ds_wse.lake.values, ds_era5.lake.values),
             np.intersect1d(ds_ecmwf.lake.values, ds_static.lake.values),
         ).astype(np.int64)
+
+        # if lake_ids is provided, filter to those that are in the datacubes; otherwise use all common lakes
         if lake_ids is None:
             lake_ids = all_cube_lakes
         else:
+            # Filter the provided lake_ids to those that are actually present in all datacubes. This ensures we only attempt to load data for lakes that have complete information across all sources.
             lake_ids = np.array(
                 [lid for lid in lake_ids if lid in all_cube_lakes], dtype=np.int64
             )
         if len(lake_ids) == 0:
             raise ValueError("No lakes in common across all four datacubes.")
 
-        # Dates: intersection of WSE and ERA5 time axes
+        # Find the intersection of dates across WSE and ERA5 datacubes to ensure temporal alignment. ECMWF init_dates will be filtered later based on ERA5 history availability.
         dates = pd.DatetimeIndex(ds_wse.time.values).intersection(
             pd.DatetimeIndex(ds_era5.time.values)
         )
         if len(dates) == 0:
             raise ValueError("No overlapping dates across WSE and ERA5 datacubes.")
 
+        # ECMWF init_dates (forecast issue dates) may not align perfectly with ERA5/WSE dates. We'll filter to valid init_dates later, but for now we just need the full list of init_dates available in the ECMWF datacube.
         ecmwf_init_dates = pd.DatetimeIndex(ds_ecmwf.init_time.values)
 
         # Dynamic features: WSE block (8) + ERA5 block (13) → (n_lakes, n_dates, 21)
-        wse_feat  = _stack_vars(ds_wse,  WSE_INPUT_VARS,    lake=lake_ids, time=dates)
-        era5_feat = _stack_vars(ds_era5, ERA5_CLIMATE_VARS, lake=lake_ids, time=dates)
-        dynamic_features = np.concatenate([wse_feat, era5_feat], axis=-1)
+        wse_feat  = _stack_vars(ds_wse,  WSE_INPUT_VARS,    lake=lake_ids, time=dates) # dimensions: (n_lakes, n_dates, 8)
+        era5_feat = _stack_vars(ds_era5, ERA5_CLIMATE_VARS, lake=lake_ids, time=dates) # dimensions: (n_lakes, n_dates, 13)
+        dynamic_features = np.concatenate([wse_feat, era5_feat], axis=-1) # shape: (n_lakes, n_dates, 21)
 
         wse_target = ds_wse["wse"].sel(lake=lake_ids, time=dates).values.astype(np.float32)
         obs_mask   = ds_wse["obs_mask"].sel(lake=lake_ids, time=dates).values.astype(np.float32)
@@ -224,14 +229,14 @@ class TemporalGraphDatasetLake(Dataset):
         ecmwf_forecast: np.ndarray,         # (n_lakes, n_init_dates, forecast_horizon, CLIMATE_DIM)
         static_features: np.ndarray,        # (n_lakes, n_static)
         edge_index: np.ndarray,             # (2, n_edges)
-        era5_dates: pd.DatetimeIndex,
-        ecmwf_init_dates: pd.DatetimeIndex,
-        wse_labels: np.ndarray,             # (n_lakes, n_era5_dates)
-        obs_mask: np.ndarray,               # (n_lakes, n_era5_dates)
+        era5_dates: pd.DatetimeIndex,       # All ERA5 dates in chronological order
+        ecmwf_init_dates: pd.DatetimeIndex, # All ECMWF init_dates in chronological order
+        wse_labels: np.ndarray,             # (n_lakes, n_era5_dates) # Observed WSE values for label extraction (NaN where not observed)
+        obs_mask: np.ndarray,               # (n_lakes, n_era5_dates) # 1 where SWOT observed, 0 otherwise (for label masking)
         lake_ids: np.ndarray,               # (n_lakes,)
-        seq_len: int = 30,
-        forecast_horizon: int = 10,
-        indices: Optional[np.ndarray] = None,
+        seq_len: int = 30,                  # ERA5 history window length in days
+        forecast_horizon: int = 10,         # ECMWF forecast window length in days
+        indices: Optional[np.ndarray] = None, # Optional pre-computed array of valid ECMWF init_date positions (train/val/test split
     ):
         """
         Args:
@@ -265,12 +270,13 @@ class TemporalGraphDatasetLake(Dataset):
         self.n_lakes         = era5_dynamic.shape[0]
 
         # O(1) date → index lookup — avoids repeated linear scans during __getitem__
+        # {date: i} maps ERA5 dates to their position in the era5_dynamic array, which is needed to efficiently extract the history window and label values for each init_date during __getitem__.
         self.era5_date_to_idx  = {d: i for i, d in enumerate(era5_dates)}
+        # {init_date: j} maps ECMWF init_dates to their position in the ecmwf_forecast array. We filter valid init_dates later based on ERA5 history availability, but we need this mapping to efficiently look up the forecast climate for each init_date during __getitem__.
         self.ecmwf_date_to_idx = {d: i for i, d in enumerate(ecmwf_init_dates)}
 
-        # valid_starts: integer positions j in ecmwf_init_dates where the full
-        # ERA5 history window is available. Passed in as a pre-computed subset
-        # (train/val/test split) or computed fresh from scratch.
+        # valid_starts: indices if provided, otherwise find valid init_dates with full ERA5 history coverage
+        # indices: provided when building the train/val/test datasets
         self.valid_starts = indices if indices is not None else self._find_valid_starts()
 
     def _find_valid_starts(self) -> np.ndarray:
@@ -297,6 +303,21 @@ class TemporalGraphDatasetLake(Dataset):
     def __getitem__(
         self, idx: int
     ) -> Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        
+        For the given sample index, construct the input feature sequence, labels, and mask.
+
+        Inputs:
+            idx: index into self.valid_starts, which maps to a valid ECMWF init_date with full ERA5 history coverage.
+
+        Returns: 
+            data_list: list of PyG Data objects, one per timestep (length seq_len + forecast_horizon)
+            static: Tensor of shape (n_lakes, n_static) — static features for all lakes
+            labels: Tensor of shape (n_lakes, forecast_horizon) — WSE values for forecast days (NaN→0)
+            label_mask: Tensor of shape (n_lakes, forecast_horizon) — 1 where SWOT observed, 0 otherwise
+
+        """
+
         # Map dataset index → position in ecmwf_init_dates (skips invalid starts)
         j = int(self.valid_starts[idx])
         init_date = self.ecmwf_init_dates[j]
@@ -377,7 +398,7 @@ class TemporalGraphDatasetLake(Dataset):
                 num_nodes=self.n_lakes,
             )
             for t in range(self.seq_len + self.forecast_horizon)
-        ]
+        ] # dim: list of 40 Data objects, each with x shape (n_lakes, 14)
 
         static = torch.from_numpy(self.static_features)  # (n_lakes, n_static)
 
@@ -393,15 +414,23 @@ def collate_temporal_graph_batch_lake(
     batch: List[Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]],
 ) -> Tuple[List[List["Data"]], torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Collate a batch of lake forecast samples.
+    Create a batch of temporal graph samples by collating lists of PyG Data objects and tensors.
 
+    Inputs: 
+    batch: List of samples, where each sample is a tuple of:
+        - data_list: list of 40 PyG Data objects (one per timestep)
+        - static: Tensor (n_lakes, n_static)
+        - labels: Tensor (n_lakes, 10)
+        - label_mask: Tensor (n_lakes, 10)
     Returns:
-        data_lists:   list of per-sample 40-graph sequences
+        data_lists:   batch size of [40 * PyG Data]
         static_feats: (batch_size, n_lakes, n_static)
         labels:       (batch_size, n_lakes, 10)
         masks:        (batch_size, n_lakes, 10)
     """
-    data_lists   = [b[0] for b in batch]
+
+    # 
+    data_lists   = [b[0] for b in batch] # B * list[40 * Data]
     static_feats = torch.stack([b[1] for b in batch])   # (B, n_lakes, n_static)
     labels       = torch.stack([b[2] for b in batch])   # (B, n_lakes, 10)
     masks        = torch.stack([b[3] for b in batch])   # (B, n_lakes, 10)
@@ -706,7 +735,7 @@ def build_spatial_cv_fold(
     Graph structure:
         ALL lakes remain as nodes in the graph for every dataset so that message
         passing can propagate information across the full network topology.
-        The ``spatial_train_mask`` attribute on each returned dataset tells
+        The ``spatial_mask`` attribute on each returned dataset tells
         ``_run_epoch`` which nodes contribute to the loss for that dataset.
 
     Normalization (no leakage):
@@ -738,13 +767,11 @@ def build_spatial_cv_fold(
     Returns:
         (train_ds, val_ds, test_ds, norm_stats)
 
-        Each dataset has two extra attributes set after construction:
-            spatial_train_mask : (n_lakes,) float32 tensor — 1 for this dataset's
-                                 training / val lakes (loss-active nodes)
-            spatial_test_mask  : (n_lakes,) float32 tensor — 1 for held-out test lakes
+        Each dataset has one extra attribute set after construction:
+            spatial_mask : (n_lakes,) float32 tensor — 1 for this dataset's
+                           active lakes (loss-active nodes)
 
-        Pass ``spatial_mask=ds.spatial_train_mask`` to ``_run_epoch`` for train/val
-        passes, and ``spatial_mask=ds.spatial_test_mask`` for the final test evaluation.
+        Pass ``spatial_mask=ds.spatial_mask`` to ``_run_epoch``.
 
         norm_stats keys: log1p_dynamic_indices, zscore_dynamic_indices,
                          dynamic_mean, dynamic_std, static_mean, static_std
@@ -754,14 +781,14 @@ def build_spatial_cv_fold(
 
     # ── Load all arrays from datacubes ────────────────────────────────────────
     (
-        era5_dynamic,
-        ecmwf_forecast,
-        static_features,
-        wse_labels,
-        obs_mask,
-        lake_ids_out,
-        era5_dates,
-        ecmwf_init_dates,
+        era5_dynamic, # (n_lakes, n_era5_dates, SWOT_DIM+CLIMATE_DIM)
+        ecmwf_forecast, # (n_lakes, n_ecmwf_init_dates, forecast_horizon, CLIMATE_DIM)
+        static_features, # (n_lakes, n_static)
+        wse_labels, # (n_lakes, n_time_steps) actual SWOT WSE observations (NaN if not observed)
+        obs_mask, # (n_lakes, n_time_steps) binary mask of SWOT WSE observations
+        lake_ids_out, # (n_lakes,) array of lake IDs corresponding to the first dimension of all arrays
+        era5_dates, # list of pd.Timestamp, length n_era5_dates
+        ecmwf_init_dates, # list of pd.Timestamp, length n_ecmwf_init_dates
     ) = assemble_lake_features_from_datacubes(
         wse_datacube_path=wse_datacube_path,
         era5_climate_datacube_path=era5_climate_datacube_path,
@@ -769,6 +796,7 @@ def build_spatial_cv_fold(
         static_datacube_path=static_datacube_path,
     )
 
+    # Tally total lakes for sanity checks and graph construction
     n_lakes_total = len(lake_ids_out)
 
     # ── Build lake graph ──────────────────────────────────────────────────────
@@ -780,15 +808,15 @@ def build_spatial_cv_fold(
     # ── Random spatial fold assignment ────────────────────────────────────────
     # Shuffle lake array positions (not IDs) with the fixed seed, then chunk
     # into n_folds groups.  fold_idx picks the test chunk; all others are train.
-    rng = np.random.default_rng(spatial_split_seed)
+    rng = np.random.default_rng(spatial_split_seed) # deterministic shuffling of lake positions
     shuffled_positions = rng.permutation(n_lakes_total)   # positions in lake_ids_out
 
     # np.array_split produces n_folds chunks of as-equal-as-possible size
-    fold_chunks = np.array_split(shuffled_positions, n_folds)
-    test_positions  = fold_chunks[fold_idx]               # array positions → test
+    fold_chunks = np.array_split(shuffled_positions, n_folds) # list of n_folds arrays of lake positions
+    test_positions  = fold_chunks[fold_idx]               # dim: (n_test_lakes,) positions of test lakes in the original arrays
     train_positions = np.concatenate(
         [fold_chunks[i] for i in range(n_folds) if i != fold_idx]
-    )
+    ) # remaining positions → train (includes val in both val_method modes)
 
     print(
         f"Spatial CV fold {fold_idx + 1}/{n_folds}: "
@@ -797,8 +825,18 @@ def build_spatial_cv_fold(
     )
 
     # ── Find all valid init_date positions ────────────────────────────────────
-    era5_date_to_idx = {d: i for i, d in enumerate(era5_dates)}
+    era5_date_to_idx = {d: i for i, d in enumerate(era5_dates)} 
+    # A reverse lookup to find the index of any given dates
+    # era5_dates: is a list of all dates in the ERA5 time series
+    # {pd.Timestamp('1980-01-01 00:00:00'): 0, pd.Timestamp('1980-01-02 00:00:00'): 1, ...}
 
+    # Loop through each ECMWF initialize date
+    # Check if it has a full ERA5 history window before it 
+    # Check if it has a SWOT observation on the forecast days
+    # all_valid: list of indices of ecmwf_init_dates that meet the criteria to be included in the dataset
+    # criteria: 
+    # 1) There must be a full seq_len ERA5 history before the init_date (i.e., era5_idx >= seq_len - 1)
+    # 2） If require_obs_on_any_forecast_day is True, at least one of the forecast days must have a SWOT observation (obs_mask sum > 0)
     all_valid = []
     for j, init_date in enumerate(ecmwf_init_dates):
         last_hist_day = init_date - pd.Timedelta(days=1)
@@ -819,7 +857,9 @@ def build_spatial_cv_fold(
 
         all_valid.append(j)
 
+    # Convert to numpy array for easier indexing later; also get the count of valid init_dates
     all_valid = np.array(all_valid, dtype=np.int64)
+    # Get number of valid init_dates that will be used for splitting into train/val/test
     n_valid   = len(all_valid)
 
     if n_valid == 0:
@@ -850,23 +890,26 @@ def build_spatial_cv_fold(
         )
 
     elif val_method == "spatial":
-        # All dates for every dataset; a random subset of train-fold lakes is
-        # held out as the spatial validation set.
+        # Train/val/test should use all initial dates 
         train_idx = all_valid
         val_idx   = all_valid
         test_idx  = all_valid
 
+        # Randomly hold out a spatial_val_frac fraction of the train-fold lakes as a spatial val set.
         rng_val = np.random.default_rng(spatial_split_seed + 1)
+        # Get the number of lakes to hold out for validation, ensuring at least one lake is in the val set
         n_spatial_val  = max(1, int(len(train_positions) * spatial_val_frac))
+        # Permutation of train_positions to randomly select lakes for spatial validation
         perm           = rng_val.permutation(len(train_positions))
-        val_active_positions   = train_positions[perm[:n_spatial_val]]
-        train_active_positions = train_positions[perm[n_spatial_val:]]
+        # Get the positions of the lakes for validation and training based on the random permutation
+        val_active_positions   = train_positions[perm[:n_spatial_val]] # dim: (n_val_lakes,) positions of val lakes in the original arrays
+        train_active_positions = train_positions[perm[n_spatial_val:]] # dim: (n_train_lakes,) positions of train-train lakes in the original arrays
 
         # Normalization source: train-train lakes only (no val or test lake leakage)
         norm_positions = train_active_positions
 
         print(
-            f"  Val method: spatial — {n_valid} total dates | "
+            f"  Val method: spatial"
             f"{len(train_active_positions)} train lakes / "
             f"{len(val_active_positions)} val lakes"
         )
@@ -878,10 +921,11 @@ def build_spatial_cv_fold(
     # Statistics are derived from `norm_positions` lakes only (no leakage into
     # val or test lakes).  All ERA5 dates are included.
     _LOG1P_DYN  = [5, 10, 15]
+    # 5： days_since_last_obs, 10: P, 15: sf — all right-skewed, zero-bounded → log1p + z-score
     _ZSCORE_DYN = [2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
-    era5_dynamic   = era5_dynamic.copy()
-    ecmwf_forecast = ecmwf_forecast.copy()
+    era5_dynamic   = era5_dynamic.copy() # dim： (n_lakes, n_era5_dates, n_features)
+    ecmwf_forecast = ecmwf_forecast.copy() # dim: (n_lakes, n_ecmwf_init_dates, forecast_horizon, n_climate_features)
 
     # Step 1: log1p on skewed features (all lakes, all dates)
     for i in _LOG1P_DYN:
@@ -895,7 +939,7 @@ def build_spatial_cv_fold(
     dyn_std  = np.ones(n_dyn,  dtype=np.float32)
 
     for i in _ZSCORE_DYN:
-        vals        = norm_era5_slice[:, :, i].ravel()
+        vals        = norm_era5_slice[:, :, i].ravel() # dim: (n_norm_lakes * n_dates,) all values for this feature across the norm_positions lakes and all dates
         dyn_mean[i] = float(vals.mean())
         dyn_std[i]  = float(vals.std()) + 1e-8
 
@@ -907,9 +951,10 @@ def build_spatial_cv_fold(
     ecmwf_log1p_indices  = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _LOG1P_DYN]
     ecmwf_zscore_indices = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _ZSCORE_DYN]
 
+    # Apply log1p to ECMWF variables of precipitaiton and snowfall
     for k in ecmwf_log1p_indices:
         ecmwf_forecast[:, :, :, k] = np.log1p(np.clip(ecmwf_forecast[:, :, :, k], 0, None))
-
+    # Apply z-score to ECMWF climate features using the same ERA5-derived mean/std for consistency
     for k in ecmwf_zscore_indices:
         era5_idx = SWOT_DIM + k
         ecmwf_forecast[:, :, :, k] = (
@@ -960,24 +1005,20 @@ def build_spatial_cv_fold(
     # Build per-dataset spatial masks (1 = active node for loss, 0 = silent node).
     # train_ds and val_ds may differ when val_method="spatial".
     def _make_mask(positions: np.ndarray) -> torch.Tensor:
+        # Output: (n_lakes,) binary mask with 1 for positions in the input array, 0 elsewhere
         m = np.zeros(n_lakes_total, dtype=np.float32)
         m[positions] = 1.0
         return torch.from_numpy(m)
 
+    # get the mask for each dataset 
     train_mask_t = _make_mask(train_active_positions)
     val_mask_t   = _make_mask(val_active_positions)
     test_mask_t  = _make_mask(test_positions)
 
-    # spatial_train_mask: the mask to pass to _run_epoch for this dataset's role.
-    # spatial_test_mask:  always the held-out test lake mask (same for all datasets).
-    train_ds.spatial_train_mask = train_mask_t
-    train_ds.spatial_test_mask  = test_mask_t
-
-    val_ds.spatial_train_mask   = val_mask_t    # val lakes (may differ from train_mask_t)
-    val_ds.spatial_test_mask    = test_mask_t
-
-    test_ds.spatial_train_mask  = train_mask_t  # not typically used, but included for completeness
-    test_ds.spatial_test_mask   = test_mask_t
+    # Each dataset carries the mask for its own active lakes.
+    train_ds.spatial_mask = train_mask_t # dim: (n_lakes,) 1 for train-train lakes, 0 for val/test lakes
+    val_ds.spatial_mask   = val_mask_t # dimn: (n_lakes,) 1 for val lakes (either same as train or a subset), 0 for train-train and test lakes
+    test_ds.spatial_mask  = test_mask_t
 
     print(
         f"Spatial CV datasets built: "

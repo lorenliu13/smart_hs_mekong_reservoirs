@@ -9,7 +9,7 @@ Key differences from run_training_lake_wse1d.py (temporal CV):
   - Dataset built with build_spatial_cv_fold instead of
     build_temporal_dataset_from_lake_datacubes.
   - ALL lake nodes remain in the graph so message passing spans the full
-    network; spatial_train_mask / spatial_test_mask gate which nodes contribute
+    network; spatial_mask gates which nodes contribute
     to the loss.
   - Normalization statistics are derived from training lakes only.
   - After training, the best checkpoint is evaluated on the held-out test lakes
@@ -61,6 +61,7 @@ from training.train import _run_epoch
 def train(cfg, args):
     device = torch.device(args.device)
 
+    # Set random seeds for reproducibility; this affects the lake split and model initialization
     if args.seed is not None:
         import random
         import numpy as np
@@ -92,11 +93,12 @@ def train(cfg, args):
     print(f"Static features: {static_dim} attributes per lake (auto-detected)")
 
     # Spatial masks gate the loss to the relevant lake subset in each phase
-    train_spatial_mask = train_ds.spatial_train_mask   # (n_lakes,) — train-train lakes
-    val_spatial_mask   = val_ds.spatial_train_mask     # (n_lakes,) — spatial-val lakes
-    test_spatial_mask  = train_ds.spatial_test_mask    # (n_lakes,) — held-out test lakes
+    train_spatial_mask = train_ds.spatial_mask   # (n_lakes,) — train lakes
+    val_spatial_mask   = val_ds.spatial_mask     # (n_lakes,) — spatial-val lakes
+    test_spatial_mask  = test_ds.spatial_mask    # (n_lakes,) — held-out test lakes
 
     # ── DataLoaders ─────────────────────────────────────────────────────────
+    # Create PyTorch DataLoaders for train, val, and test sets; use the same collate_fn for all since they share the same graph structure
     loader_kwargs = dict(
         batch_size = cfg["training"]["batch_size"],
         collate_fn = collate_temporal_graph_batch_lake,
@@ -118,6 +120,7 @@ def train(cfg, args):
     grad_clip = cfg["training"].get("grad_clip", 1.0)
     patience  = cfg["training"].get("patience", 20)
 
+    # Get the number of trainable parameters for reference
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model: {n_params:,} trainable parameters")
 
@@ -149,20 +152,22 @@ def train(cfg, args):
                                spatial_mask=val_spatial_mask)
         epoch_secs = time.time() - epoch_start
 
-        train_losses.append(avg_train)
-        val_losses.append(avg_val)
-        scheduler.step(avg_val)
+        train_losses.append(avg_train) # track train loss for this epoch
+        val_losses.append(avg_val) # track val loss for this epoch
+        scheduler.step(avg_val) # adjust learning rate based on val loss plateau
 
-        lr = optimizer.param_groups[0]["lr"]
-        lr_history.append(lr)
-        ts_history.append(datetime.now(timezone.utc).isoformat(timespec="seconds"))
-
+        lr = optimizer.param_groups[0]["lr"] # get current learning rate for logging
+        lr_history.append(lr) # track learning rate for this epoch
+        ts_history.append(datetime.now(timezone.utc).isoformat(timespec="seconds")) # track timestamp for this epoch
+        
         if avg_val < best_val_loss:
+            # If validation loss improved, update best_val_loss and best_epoch, reset patience counter, and save model checkpoint.
             best_val_loss    = avg_val
             best_epoch       = epoch
             patience_counter = 0
             torch.save(model.state_dict(), tmp_ckpt)
         else:
+            # If validation loss did not improve, increment patience counter. If patience counter exceeds the patience threshold, we will stop training early.
             patience_counter += 1
 
         print(f"Epoch {epoch+1:>3}/{cfg['training']['num_epochs']} | "
@@ -175,7 +180,8 @@ def train(cfg, args):
                   f"val loss did not improve for {patience} epochs.")
             stopped_early = True
             break
-
+    
+    # Calcluate the total training time
     total_training_secs = time.time() - training_start
     h, rem = divmod(int(total_training_secs), 3600)
     m, s   = divmod(rem, 60)
@@ -328,10 +334,14 @@ def train(cfg, args):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
+    # __file__ is the path to this script; resolve to absolute path and get parent dir
     script_dir = Path(__file__).resolve().parent
+    # Set up argument parser with config path defaulting to configs/default.yaml
     parser = argparse.ArgumentParser(
         description="Spatial CV — 1-day-ahead lake WSE forecasting (SWOT-GNN)"
-    )
+    ) # description shown in python script.py --help
+    # This allows user to specifiy a custom settings file 
+    # help: provides a description of this argument for the help menu
     parser.add_argument(
         "--config", default=str(script_dir / "configs" / "default.yaml"),
         help="Path to YAML config (default: configs/default.yaml)",
@@ -371,22 +381,32 @@ def main():
     parser.add_argument("--patience",   type=int, default=None)
     parser.add_argument("--seed",       type=int, default=None,
                         help="Model training seed (overrides config)")
+    # create args from the command line input
     args = parser.parse_args()
 
     with open(args.config) as f:
+        # Load config from YAML file; this should include all hyperparameters and settings
         cfg = yaml.safe_load(f)
 
+    # if the user specified num_epochs or patience on the command line, override the config values
     if args.num_epochs is not None:
         cfg["training"]["num_epochs"] = args.num_epochs
     if args.patience is not None:
         cfg["training"]["patience"] = args.patience
 
+    # if the user did not specify a seed on the command line, use the one from the config or default to 42
     if args.seed is None:
         args.seed = cfg.get("seed", 42)
 
+    # look up model slug for the specified model type; default to "SWOTGNN" if not specified in config
     model_type = cfg["model"].get("model_type", "SWOTGNN")
-    model_slug = MODEL_REGISTRY[model_type].slug
+    # the MODEL_REGISTRY maps model type strings to their corresponding classes and metadata; we extract the slug for naming purposes
+    model_slug = MODEL_REGISTRY[model_type].slug # slug is a short identifier for the model, e.g. "swotgnn"
+
     # Encode fold info, val method, and seeds in the run folder name for traceability
+    # If it is temporal, run name will look like: exp01_spatialcv_fold0of5_spseed42_valt_swotgnn_s42
+    # If it is spatial, run name will look like: exp01_spatialcv_fold0of5_spseed42_valsp0.1_swotgnn_s42
+    # valsp 0.1 means 10% of the training lakes are held out for validation
     val_tag = (
         f"_valsp{args.spatial_val_frac}" if args.val_method == "spatial"
         else "_valt"   # temporal
@@ -400,6 +420,7 @@ def main():
         f"_s{args.seed}"
     )
 
+    # This script is specifically designed for 1-day-ahead forecasting; enforce this to avoid confusion
     assert cfg["training"]["forecast_horizon"] == 1, (
         "run_spatial_cv_wse1d.py is designed for forecast_horizon=1."
     )

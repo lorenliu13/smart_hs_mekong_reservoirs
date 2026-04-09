@@ -150,20 +150,27 @@ def _run_epoch(
 
     Returns the mean per-batch loss over the full loader.
     """
+    # Determine if we are in training mode
     is_train = optimizer is not None
+    # Set model to train() or eval() mode accordingly
     model.train(is_train)
+    # Use torch.enable_grad() for training and torch.no_grad() for evaluation
     ctx = torch.enable_grad() if is_train else torch.no_grad()
 
+    # Initialize accumulators for total loss and batch count
     total_loss, n_batches = 0.0, 0
+    # Loop over batches in the loader
     with ctx:
+        # Each batch is a list of samples, where each sample is a list of Data objects (one per time step).
         for data_lists, static_feats, labels, masks in loader:
-            B = len(data_lists)
+            B = len(data_lists) # get batch size (number of samples in this batch)
             if B == 0:
                 continue
 
             # Stack node features across time for each sample, then concatenate
             x_list  = [torch.stack([d.x for d in data_lists[b]], dim=1) for b in range(B)]
             n_lakes = x_list[0].size(0)
+            # x_list is a list of B tensors, each of shape (n_lakes, T, feat). We concatenate along the batch dimension to get (B*n_lakes, T, feat).
             x_batch = torch.cat(x_list, dim=0).to(device)             # (B*N, T, feat)
 
             # All samples share the same graph topology — tile edge_index with node offsets
@@ -183,6 +190,7 @@ def _run_epoch(
             # Apply spatial mask: tile (n_lakes,) → (B*n_lakes,) and AND with obs mask.
             # Message passing uses all nodes; only the loss is gated by this mask.
             if spatial_mask is not None:
+                # If spatial_mask is provided, we convert it to float and tile it to match the batch size, then multiply it with the obs mask to get the final mask for loss computation.
                 sm  = spatial_mask.to(device).float()                  # (n_lakes,)
                 sm  = sm.unsqueeze(0).expand(B, -1).reshape(-1)        # (B*n_lakes,)
                 msk = msk * sm
@@ -190,21 +198,25 @@ def _run_epoch(
             if is_train:
                 optimizer.zero_grad()
 
+            # Forward pass through the model. The model should be designed to handle the concatenated batch of graphs with the tiled edge_index and batch vector.
             pred = model(x_batch, edge_index_tiled,
                          static_features=static_batch, batch=batch_vec)
             # Gaussian models return (mean, log_std); point models return a tensor
             if isinstance(pred, tuple):
+                # If the model returns a tuple (mean, log_std), we unpack it and pass both to the criterion. The criterion will compute the loss using both mean and log_std, along with the target labels and mask.
                 loss = criterion(*pred, lab, msk)  # mean, log_std, target, mask
             else:
+                # If the model returns a single tensor (point predictions), we pass it directly to the criterion along with the target labels and mask.
                 loss = criterion(pred, lab, msk)
 
+            # If in training mode, backpropagate the loss and update the model parameters. We also apply gradient clipping if grad_clip > 0 to prevent exploding gradients.
             if is_train:
-                loss.backward()
+                loss.backward() # backpropagate the loss to compute gradients
                 if grad_clip > 0:
                     nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                optimizer.step()
+                optimizer.step() # update model parameters based on computed gradients
 
-            total_loss += loss.item()
-            n_batches  += 1
+            total_loss += loss.item() # accumulate loss for this batch
+            n_batches  += 1 # increment batch count
 
-    return total_loss / max(n_batches, 1)
+    return total_loss / max(n_batches, 1) # return mean loss over all batches, avoid division by zero
