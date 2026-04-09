@@ -433,10 +433,23 @@ def main():
     def _filter_test(df: pd.DataFrame) -> pd.DataFrame:
         return df[df['is_test_lake']].copy()
 
+    # Dedup keys: same (lake, init_date, lead_day) can appear in multiple splits
+    # when val_method="spatial" (all three datasets share the same date range) or
+    # in temporal mode (test_idx = all_valid overlaps both train and val ranges).
+    _DEDUP_KEYS = ["lake_id", "init_date", "lead_day"]
+
     test_only_from_test   = _filter_test(test_df)
     test_only_from_val    = _filter_test(val_df)
-    test_only_full        = _filter_test(pd.concat([train_df, val_df, test_df], ignore_index=True))
-    val_test_combined     = _filter_test(pd.concat([val_df, test_df], ignore_index=True))
+    test_only_full        = (
+        _filter_test(pd.concat([train_df, val_df, test_df], ignore_index=True))
+        .drop_duplicates(subset=_DEDUP_KEYS)
+        .reset_index(drop=True)
+    )
+    val_test_combined     = (
+        _filter_test(pd.concat([val_df, test_df], ignore_index=True))
+        .drop_duplicates(subset=_DEDUP_KEYS)
+        .reset_index(drop=True)
+    )
 
     lake_metrics_test_df     = compute_lake_metrics(test_only_from_test)
     lake_metrics_val_test_df = compute_lake_metrics(val_test_combined)
@@ -445,10 +458,11 @@ def main():
     lake_metrics_test_df.to_csv(run_dir     / "lake_metrics_test.csv",     index=False)
     lake_metrics_val_test_df.to_csv(run_dir / "lake_metrics_val_test.csv", index=False)
     lake_metrics_full_df.to_csv(run_dir     / "lake_metrics_full.csv",     index=False)
+    val_mode_note = "(all dates — same as test for spatial val)" if args.val_method == "spatial" else "(val+test date range)"
     print(f'Per-lake metrics saved (test lakes only, {len(lake_metrics_test_df)} lakes):')
     print(f'  -> {run_dir}/lake_metrics_test.csv       (test split, test lakes)')
-    print(f'  -> {run_dir}/lake_metrics_val_test.csv   (val+test splits, test lakes)')
-    print(f'  -> {run_dir}/lake_metrics_full.csv       (all splits, test lakes)')
+    print(f'  -> {run_dir}/lake_metrics_val_test.csv   {val_mode_note}, test lakes)')
+    print(f'  -> {run_dir}/lake_metrics_full.csv       (all splits deduped, test lakes)')
 
     # ── Median summary with 5th-95th percentile CI ────────────────────────────
     metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr',
