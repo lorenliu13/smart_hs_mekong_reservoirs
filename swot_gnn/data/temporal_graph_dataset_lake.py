@@ -981,7 +981,7 @@ def build_spatial_cv_fold(
 
     print(
         f"Spatial CV datasets built: "
-        f"{len(train_ds)} samples each (all dates) | "
+        f"{len(train_ds)} init dates (shared across train/val/test) | "
         f"{len(train_active_positions)} train lakes / "
         f"{len(val_active_positions)} val lakes / "
         f"{len(test_positions)} test lakes"

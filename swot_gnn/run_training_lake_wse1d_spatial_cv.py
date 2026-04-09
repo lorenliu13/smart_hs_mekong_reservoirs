@@ -92,8 +92,9 @@ def train(cfg, args):
     print(f"Static features: {static_dim} attributes per lake (auto-detected)")
 
     # Spatial masks gate the loss to the relevant lake subset in each phase
-    train_spatial_mask = train_ds.spatial_train_mask   # (n_lakes,) — train lakes
-    test_spatial_mask  = train_ds.spatial_test_mask    # (n_lakes,) — test  lakes
+    train_spatial_mask = train_ds.spatial_train_mask   # (n_lakes,) — train-train lakes
+    val_spatial_mask   = val_ds.spatial_train_mask     # (n_lakes,) — spatial-val lakes
+    test_spatial_mask  = train_ds.spatial_test_mask    # (n_lakes,) — held-out test lakes
 
     # ── DataLoaders ─────────────────────────────────────────────────────────
     loader_kwargs = dict(
@@ -143,9 +144,9 @@ def train(cfg, args):
         avg_train = _run_epoch(model, train_loader, criterion, device,
                                optimizer=optimizer, grad_clip=grad_clip,
                                spatial_mask=train_spatial_mask)
-        # Validation loss: observed MSE on train lakes, held-out time window
+        # Validation loss: observed MSE on spatial-val lakes (unseen during training)
         avg_val   = _run_epoch(model, val_loader,   criterion, device,
-                               spatial_mask=train_spatial_mask)
+                               spatial_mask=val_spatial_mask)
         epoch_secs = time.time() - epoch_start
 
         train_losses.append(avg_train)
