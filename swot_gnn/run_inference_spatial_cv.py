@@ -336,6 +336,8 @@ def main():
         f"_valsp{args.spatial_val_frac}" if args.val_method == "spatial"
         else "_valt"
     )
+    # Save base name before augmentation; matches the parent directory created during training
+    base_run_name = args.run_name
     args.run_name = (
         f"{args.run_name}"
         f"_fold{args.fold_idx}of{args.n_folds}"
@@ -345,7 +347,8 @@ def main():
         f"_s{args.seed}"
     )
 
-    run_dir  = Path(args.save_dir) / args.run_name
+    # Mirrors the training output path: save_dir / base_run_name / fold_{fold_idx}/
+    run_dir  = Path(args.save_dir) / base_run_name / f"fold_{args.fold_idx}"
     cfg_path = run_dir / "run_config.yaml"
 
     print(f"Resolved run directory: {run_dir}")

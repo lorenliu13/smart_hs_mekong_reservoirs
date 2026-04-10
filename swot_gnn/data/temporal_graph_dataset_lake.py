@@ -909,7 +909,7 @@ def build_spatial_cv_fold(
         norm_positions = train_active_positions
 
         print(
-            f"  Val method: spatial"
+            f"  Val method: spatial - "
             f"{len(train_active_positions)} train lakes / "
             f"{len(val_active_positions)} val lakes"
         )
