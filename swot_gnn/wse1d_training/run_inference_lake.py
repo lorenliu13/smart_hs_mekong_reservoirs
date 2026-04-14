@@ -35,7 +35,7 @@ import pandas as pd
 import torch
 from scipy import stats as scipy_stats
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.temporal_graph_dataset_lake import build_temporal_dataset_from_lake_datacubes
 from models.registry import MODEL_REGISTRY

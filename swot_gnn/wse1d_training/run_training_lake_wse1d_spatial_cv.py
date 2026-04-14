@@ -46,7 +46,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.temporal_graph_dataset_lake import (
     build_spatial_cv_fold,
@@ -337,7 +337,7 @@ def train(cfg, args):
 
 def main():
     # __file__ is the path to this script; resolve to absolute path and get parent dir
-    script_dir = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parent.parent
     # Set up argument parser with config path defaulting to configs/default.yaml
     parser = argparse.ArgumentParser(
         description="Spatial CV — 1-day-ahead lake WSE forecasting (SWOT-GNN)"

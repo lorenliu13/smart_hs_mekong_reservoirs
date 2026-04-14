@@ -46,7 +46,7 @@ import pandas as pd
 import torch
 from scipy import stats as scipy_stats
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.regional_cv import (
     build_regional_cv_fold,

@@ -2,11 +2,12 @@
 Training primitives for SWOT-GNN.
 
 Exports:
-    ObservedMSELoss          — masked MSE for 1-step forecasting
-    ObservedMSELossMultiStep — masked MSE for multi-step forecasting
-    ObservedGaussianNLLLoss  — masked Gaussian NLL for probabilistic forecasting
-    ObservedGaussianCRPSLoss — masked closed-form Gaussian CRPS for probabilistic forecasting
-    _run_epoch               — one forward pass over a DataLoader (train or eval)
+    ObservedMSELoss                    — masked MSE for 1-step forecasting
+    ObservedMSELossMultiStep           — masked MSE for multi-step forecasting
+    ObservedGaussianNLLLoss            — masked Gaussian NLL for probabilistic forecasting
+    ObservedGaussianCRPSLoss           — masked closed-form Gaussian CRPS for probabilistic forecasting
+    ObservedGaussianCRPSLossMultiStep  — masked closed-form Gaussian CRPS for multi-step probabilistic forecasting
+    _run_epoch                         — one forward pass over a DataLoader (train or eval)
 """
 import math
 
@@ -113,6 +114,45 @@ class ObservedGaussianCRPSLoss(nn.Module):
         z   = (target - mean) / std
 
         # Re-create standard normal on the correct device
+        standard_normal = Normal(
+            torch.zeros(1, device=mean.device),
+            torch.ones(1,  device=mean.device),
+        )
+        phi = standard_normal.log_prob(z).exp()   # φ(z)
+        Phi = standard_normal.cdf(z)              # Φ(z)
+
+        crps = std * (z * (2 * Phi - 1) + 2 * phi - self._INV_SQRT_PI)
+        return (crps * mask).sum() / (mask.sum() + 1e-8)
+
+
+class ObservedGaussianCRPSLossMultiStep(nn.Module):
+    """Closed-form Gaussian CRPS loss for multi-step forecasting, computed only at observed nodes.
+
+    Identical math to ObservedGaussianCRPSLoss but operates on (n_nodes, horizon) tensors.
+    Loss is averaged over all (node, lead_day) pairs where obs_mask=1.
+
+    Inputs:
+        mean:    (n_nodes, horizon) — predicted mean WSE (normalised)
+        log_std: (n_nodes, horizon) — predicted log standard deviation (normalised)
+        target:  (n_nodes, horizon) — ground-truth WSE (normalised)
+        mask:    (n_nodes, horizon) — 1 if observed, 0 if not
+
+    log_std is clamped to [-6, 6] to prevent numerical explosion.
+    """
+
+    _INV_SQRT_PI = 1.0 / math.sqrt(math.pi)
+
+    def forward(
+        self,
+        mean:    torch.Tensor,  # (n_nodes, horizon)
+        log_std: torch.Tensor,  # (n_nodes, horizon)
+        target:  torch.Tensor,  # (n_nodes, horizon)
+        mask:    torch.Tensor,  # (n_nodes, horizon)
+    ) -> torch.Tensor:
+        log_std = log_std.clamp(-6, 6)
+        std = log_std.exp()
+        z   = (target - mean) / std
+
         standard_normal = Normal(
             torch.zeros(1, device=mean.device),
             torch.ones(1,  device=mean.device),

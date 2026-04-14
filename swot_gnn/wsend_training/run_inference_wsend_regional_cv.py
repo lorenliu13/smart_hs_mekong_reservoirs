@@ -1,20 +1,26 @@
 """
-Inference script for spatial cross-validation lake WSE forecasting.
+Inference script for regional cross-validation multi-day lake WSE forecasting.
 
-Mirrors run_inference_lake.py but for checkpoints produced by
-run_spatial_cv_wse1d.py.  Key differences:
+Mirrors wse1d_training/run_inference_regional_cv.py but for checkpoints produced by
+run_training_lake_wsend_regional_cv.py.  Key differences from the 1-day version:
 
-  - Datasets are rebuilt with build_spatial_cv_fold (same fold / seed args
-    as training) so the spatial masks are available.
-  - Inference is run on all three splits (train, val, test).  Every row is
-    tagged with a boolean `is_test_lake` column derived from the fold's
-    spatial_mask.
-  - Per-lake metrics (physical units) are computed ONLY for held-out test
-    lakes.  The full result CSVs are saved for all lakes / all splits.
+  - Run name slug includes _h{forecast_horizon} (matches training slug logic).
+  - forecast_horizon > 1 is asserted.
+  - Metrics are computed independently for each lead day (0 … H-1).
+  - Per-lake metric CSVs are saved per lead day:
+      lake_metrics_{split}_lead{d}.csv  (d = lead day index, 0-based)
+  - An aggregate CSV (all lead days stacked) is also saved per split:
+      lake_metrics_{split}.csv  (contains a lead_day column)
+  - The printed summary table shows median metrics broken down by lead day.
+
+Dataset reconstruction mirrors training exactly:
+  - build_regional_cv_fold with the same fold_idx / val_method / spatial_val_frac /
+    spatial_val_seed arguments.
+  - require_obs_on_any_forecast_day=True (same default as training).
 
 Usage:
-  python run_inference_spatial_cv.py \\
-    --config          configs/exp02_mekong_wse1d.yaml \\
+  python run_inference_wsend_regional_cv.py \\
+    --config          configs/wsend/exp08_wsend.yaml \\
     --wse-datacube    /path/to/swot_lake_wse_datacube_wse_norm.nc \\
     --era5-datacube   /path/to/swot_lake_era5_climate_datacube.nc \\
     --ecmwf-datacube  /path/to/swot_lake_ecmwf_forecast_datacube.nc \\
@@ -22,17 +28,15 @@ Usage:
     --wse-stats-csv   /path/to/lake_wse_norm_stats.csv \\
     --lake-graph      /path/to/gritv06_great_mekong_pld_lake_graph_0sqkm.csv \\
     --save-dir        checkpoints \\
-    --run-name        exp02_mekong_wse1d_era5_ifshres_gritv06_202312_202602 \\
+    --run-name        exp08_wsend_regionalcv \\
     --fold-idx        0 \\
-    --n-folds         5 \\
-    --spatial-seed    42 \\
     --val-method      temporal \\
     --seed            42 \\
     --device          cuda
 
-Note: --config, --fold-idx, --n-folds, --spatial-seed, --val-method, and
---seed must match the values used during training so that the run directory
-name is resolved correctly (identical slug logic to run_spatial_cv_wse1d.py).
+Note: --config, --fold-idx, --val-method, --spatial-val-frac, --spatial-val-seed,
+and --seed must match the values used during training so that the run directory
+name is resolved correctly (identical slug logic to run_training_lake_wsend_regional_cv.py).
 """
 import argparse
 import json
@@ -47,8 +51,10 @@ from scipy import stats as scipy_stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from data.temporal_graph_dataset_lake import (
-    build_spatial_cv_fold,
+from data.regional_cv import (
+    build_regional_cv_fold,
+    N_REGIONAL_FOLDS,
+    REGION_NAMES,
 )
 from models.registry import MODEL_REGISTRY
 from training.evaluate import compute_kge
@@ -161,17 +167,21 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
         lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm,
         pred_std_norm (NaN for deterministic / point models), is_test_lake
 
-    is_test_lake is True for spatially held-out test lakes, False for train lakes.
+    is_test_lake is True for regionally held-out test lakes, False for train lakes.
 
-    Inputs: 
-        ds: TemporalGraphDatasetLake with spatial masks (train_ds, val_ds, test_ds from build_spatial_cv_fold)
+    Inputs:
+        ds: TemporalGraphDatasetLake with spatial masks (train_ds, val_ds, test_ds
+            from build_regional_cv_fold)
         model: trained PyTorch model for inference
         device: torch device to run inference on
-        test_lake_ids: set of lake IDs that are in the spatially held-out test set (derived from ds.spatial_mask)
-        split_name: string label for the dataset split (e.g. 'train', 'val', 'test') used for logging purposes
+        test_lake_ids: set of lake IDs that are in the regionally held-out test set
+            (derived from ds.spatial_mask)
+        split_name: string label for the dataset split (e.g. 'train', 'val', 'test')
+            used for logging purposes
 
     Outputs:
-        DataFrame with columns: lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm, pred_std_norm, is_test_lake
+        DataFrame with columns: lake_id, init_date, forecast_date, lead_day,
+            pred_norm, target_norm, pred_std_norm, is_test_lake
     """
     records = []
     model.eval()
@@ -232,9 +242,12 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
     return df
 
 
-def compute_lake_metrics(df: pd.DataFrame) -> pd.DataFrame:
+def compute_lake_metrics(df: pd.DataFrame, lead_day: int | None = None) -> pd.DataFrame:
     """
-    Compute per-lake metrics (physical units).
+    Compute per-lake metrics (physical units) for a single lead day or all lead days.
+
+    If lead_day is not None, only rows with df['lead_day'] == lead_day are used.
+    The returned DataFrame includes a 'lead_day' column.
 
     For deterministic models, NSE/KGE/RMSE/MAE are computed on the predicted mean.
     For probabilistic models (pred_std_m present and finite), additional metrics are
@@ -243,6 +256,10 @@ def compute_lake_metrics(df: pd.DataFrame) -> pd.DataFrame:
       - cov90    : empirical 90% PI coverage (ideal = 0.90)
       - piw90_m  : mean 90% PI width in metres (lower = sharper)
     """
+    if lead_day is not None:
+        df = df[df['lead_day'] == lead_day]
+    ld_label = lead_day  # may be None when computing across all lead days
+
     has_std = "pred_std_m" in df.columns
     lake_rows = []
     for lake_id, sub in df.groupby('lake_id'):
@@ -253,6 +270,7 @@ def compute_lake_metrics(df: pd.DataFrame) -> pd.DataFrame:
         pred = sub['pred_m'].values
         mse  = float(np.mean((obs - pred) ** 2))
         row = {
+            'lead_day'    : ld_label if ld_label is not None else -1,
             'lake_id'     : lake_id,
             'is_test_lake': bool(sub['is_test_lake'].iloc[0]),
             'n_obs'       : len(sub),
@@ -272,11 +290,21 @@ def compute_lake_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(lake_rows)
 
 
+def compute_metrics_by_lead_day(df: pd.DataFrame) -> dict[int, pd.DataFrame]:
+    """
+    Compute per-lake metrics separately for each lead day present in df.
+
+    Returns a dict mapping lead_day index → per-lake metrics DataFrame.
+    """
+    lead_days = sorted(df['lead_day'].unique())
+    return {d: compute_lake_metrics(df, lead_day=d) for d in lead_days}
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Spatial-CV inference — load checkpoint, run predictions, save CSVs"
+        description="Regional-CV multi-step inference — load checkpoint, run predictions, save CSVs"
     )
     parser.add_argument("--wse-datacube",    required=True,
                         help="swot_lake_wse_datacube_wse_norm.nc")
@@ -289,7 +317,8 @@ def main():
     parser.add_argument("--wse-stats-csv",   required=True,
                         help="lake_wse_norm_stats.csv (used for denormalisation)")
     parser.add_argument("--lake-graph",      required=True,
-                        help="GRIT PLD lake graph CSV")
+                        help="GRIT PLD lake graph CSV (must contain lake_id and "
+                             "hybasin_level_4 columns)")
     parser.add_argument(
         "--config", required=True,
         help="Path to the YAML config used during training (same as --config passed to training)",
@@ -297,20 +326,26 @@ def main():
     parser.add_argument("--save-dir",  default="checkpoints",
                         help="Root directory for run outputs (same as training)")
     parser.add_argument("--run-name",  required=True,
-                        help="Base run name passed to training (without fold/seed suffixes)")
+                        help="Base run name passed to training (without fold/horizon/seed suffixes)")
     parser.add_argument("--fold-idx",  type=int, required=True,
-                        help="Fold index used during training (0-indexed)")
-    parser.add_argument("--n-folds",   type=int, default=5,
-                        help="Total number of spatial folds used during training (default 5)")
-    parser.add_argument("--spatial-seed", type=int, default=42,
-                        help="RNG seed for the lake shuffle used during training (default 42)")
+                        help="Fold index (region) used during training (0–4)")
+    parser.add_argument(
+        "--hybas-col", default="hybasin_level_4",
+        help="Column in the lake graph CSV holding the HYBAS Level-4 sub-basin ID "
+             "(default: hybasin_level_4)",
+    )
     parser.add_argument(
         "--val-method", default="temporal", choices=["temporal", "spatial"],
         help="Validation strategy used during training (default: temporal)",
     )
     parser.add_argument(
         "--spatial-val-frac", type=float, default=0.1,
-        help="Fraction of train-fold lakes used as spatial val set (only with --val-method spatial, default 0.1)",
+        help="Fraction of train-region lakes used as spatial val set "
+             "(only with --val-method spatial, default 0.1)",
+    )
+    parser.add_argument(
+        "--spatial-val-seed", type=int, default=43,
+        help="RNG seed for the spatial val lake draw used during training (default 43)",
     )
     parser.add_argument(
         "--device",
@@ -326,11 +361,17 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    # Mirror run-name construction from run_spatial_cv_wse1d.py
+    # Mirror run-name construction from run_training_lake_wsend_regional_cv.py
     if args.seed is None:
         args.seed = cfg.get("seed", 42)
 
-    model_type = cfg["model"].get("model_type", "SWOTGNN")
+    forecast_horizon = cfg["training"]["forecast_horizon"]
+    assert forecast_horizon > 1, (
+        f"run_inference_wsend_regional_cv.py is designed for forecast_horizon > 1, "
+        f"got {forecast_horizon}. Use wse1d_training/ scripts for 1-day-ahead forecasting."
+    )
+
+    model_type = cfg["model"].get("model_type", "SWOTGNNMultiStep")
     model_slug = MODEL_REGISTRY[model_type].slug
     val_tag = (
         f"_valsp{args.spatial_val_frac}" if args.val_method == "spatial"
@@ -340,8 +381,8 @@ def main():
     base_run_name = args.run_name
     args.run_name = (
         f"{args.run_name}"
-        f"_fold{args.fold_idx}of{args.n_folds}"
-        f"_sp{args.spatial_seed}"
+        f"_fold{args.fold_idx}of{N_REGIONAL_FOLDS}"
+        f"_h{forecast_horizon}"
         f"{val_tag}"
         f"_{model_slug}"
         f"_s{args.seed}"
@@ -351,17 +392,19 @@ def main():
     run_dir  = Path(args.save_dir) / base_run_name / f"fold_{args.fold_idx}"
     cfg_path = run_dir / "run_config.yaml"
 
+    region_name = REGION_NAMES.get(args.fold_idx, f"fold_{args.fold_idx}")
     print(f"Resolved run directory: {run_dir}")
+    print(f"Region [{args.fold_idx}]: {region_name}")
+    print(f"Forecast horizon: {forecast_horizon} days")
 
     if not run_dir.exists():
         raise FileNotFoundError(
             f"Run directory not found: {run_dir}\n"
-            f"Check that --run-name, --fold-idx, --n-folds, --spatial-seed, "
-            f"--val-method, --spatial-val-frac, and --seed all match the training run.\n"
+            f"Check that --run-name, --fold-idx, --val-method, --spatial-val-frac, "
+            f"--spatial-val-seed, and --seed all match the training run.\n"
             f"Expected slug: {args.run_name}"
         )
     if not cfg_path.exists():
-        # List what IS in the directory to help diagnose
         existing = sorted(run_dir.iterdir())
         existing_str = "\n  ".join(p.name for p in existing) or "(empty)"
         raise FileNotFoundError(
@@ -382,8 +425,8 @@ def main():
     # Resolve checkpoint path from run_config
     ckpt_path = run_dir / run_config["result"]["checkpoint"]
 
-    # ── Rebuild the same spatial CV split ─────────────────────────────────────
-    train_ds, val_ds, test_ds, norm_stats = build_spatial_cv_fold(
+    # ── Rebuild the same regional CV split ────────────────────────────────────
+    train_ds, val_ds, test_ds, norm_stats = build_regional_cv_fold(
         wse_datacube_path            = args.wse_datacube,
         era5_climate_datacube_path   = args.era5_datacube,
         ecmwf_forecast_datacube_path = args.ecmwf_datacube,
@@ -391,28 +434,29 @@ def main():
         lake_graph_path              = args.lake_graph,
         seq_len                      = cfg_training['seq_len'],
         forecast_horizon             = cfg_training['forecast_horizon'],
-        n_folds                      = args.n_folds,
         fold_idx                     = args.fold_idx,
-        spatial_split_seed           = args.spatial_seed,
         val_frac                     = cfg_training.get('val_frac', 0.15),
         val_method                   = args.val_method,
         spatial_val_frac             = args.spatial_val_frac,
+        spatial_val_seed             = args.spatial_val_seed,
+        hybas_col                    = args.hybas_col,
+        require_obs_on_any_forecast_day = True,
     )
     print(f'Splits: {len(train_ds)} train | {len(val_ds)} val | {len(test_ds)} test samples')
     print(f'Lakes : {test_ds.n_lakes}   Forecast horizon: {test_ds.forecast_horizon}')
-    print(f'Fold  : {args.fold_idx}/{args.n_folds}  '
+    print(f'Fold  : {args.fold_idx}/{N_REGIONAL_FOLDS}  [{region_name}]  '
           f'({norm_stats["n_test_lakes"]} test lakes / '
           f'{norm_stats["n_train_lakes"]} train lakes)')
 
     # Derive the set of held-out test lake IDs from the spatial mask
-    test_mask_np    = test_ds.spatial_mask.numpy()  # (n_lakes,) 1 for test lake, 0 for train lake
-    test_lake_ids   = set(int(lid) for lid, m in zip(test_ds.lake_ids, test_mask_np) if m > 0)
+    test_mask_np  = test_ds.spatial_mask.numpy()  # (n_lakes,) 1 for test lake, 0 for train lake
+    test_lake_ids = set(int(lid) for lid, m in zip(test_ds.lake_ids, test_mask_np) if m > 0)
     print(f'Test lake IDs resolved: {len(test_lake_ids)} lakes')
 
     # ── Load model checkpoint ─────────────────────────────────────────────────
     device         = torch.device(args.device)
     cfg_model_load = dict(cfg_model)
-    model_type     = cfg_model_load.pop("model_type", "SWOTGNN")
+    model_type     = cfg_model_load.pop("model_type", "SWOTGNNMultiStep")
     spec           = MODEL_REGISTRY[model_type]
     model          = spec.model_cls(**cfg_model_load).to(device)
 
@@ -438,8 +482,8 @@ def main():
 
     # Build lake_id → spatial group from the three spatial_mask tensors.
     # For val_method="spatial": each lake belongs to exactly one of train/val/test.
-    # For val_method="temporal": train_mask == val_mask (same train-fold lakes),
-    #   so all train-fold lakes map to 'train_fold' here; date decides train vs val.
+    # For val_method="temporal": train_mask == val_mask (same train-region lakes),
+    #   so all train-region lakes map to 'train_fold' here; date decides train vs val.
     val_mask_np_ = val_ds.spatial_mask.numpy()
     lake_to_group: dict[int, str] = {}
     for lake_i, lake_id in enumerate(test_ds.lake_ids):
@@ -452,7 +496,7 @@ def main():
             lake_to_group[lid] = 'train'
 
     if args.val_method == "temporal":
-        # train-fold lakes (currently labelled 'train' or 'val' identically above)
+        # train-region lakes (currently labelled 'train' or 'val' identically above)
         # are split by init_date: dates in train_ds.valid_starts → 'train', else → 'val'.
         train_init_dates = {
             pd.Timestamp(test_ds.ecmwf_init_dates[j]) for j in train_ds.valid_starts
@@ -484,7 +528,7 @@ def main():
     val_df   = denormalize(val_raw,   lake_stats)
     test_df  = denormalize(test_raw,  lake_stats)
 
-    # ── Save result CSVs (all lakes, all splits) ──────────────────────────────
+    # ── Save result CSVs (all lakes, all splits, all lead days) ──────────────
     col_order = [
         "lake_id", "is_test_lake", "init_date", "forecast_date", "lead_day",
         "pred_norm", "target_norm", "pred_m", "target_m",
@@ -501,37 +545,88 @@ def main():
     print(f"Result CSVs saved to {run_dir}/")
     print(f"  train: {len(train_df)} rows | val: {len(val_df)} | test: {len(test_df)}\n")
 
-    # ── Per-lake metrics — train / val / test lakes ───────────────────────────
-    # Each result DataFrame already contains rows for exactly its lake group, so
-    # compute_lake_metrics can be applied directly to each without filtering.
-    lake_metrics_train_df = compute_lake_metrics(train_df)
-    lake_metrics_val_df   = compute_lake_metrics(val_df)
-    lake_metrics_test_df  = compute_lake_metrics(test_df)
+    # ── Per-lake metrics broken down by lead day ──────────────────────────────
+    # For each split, compute metrics per lead day; stack all lead days into one
+    # aggregate CSV (with lead_day column) and also save per-lead-day CSVs.
+    lead_days = sorted(full_raw['lead_day'].unique())
 
-    lake_metrics_train_df.to_csv(run_dir / "lake_metrics_train.csv", index=False)
-    lake_metrics_val_df.to_csv(run_dir   / "lake_metrics_val.csv",   index=False)
-    lake_metrics_test_df.to_csv(run_dir  / "lake_metrics_test.csv",  index=False)
-    print(f'Per-lake metrics saved:')
-    print(f'  -> {run_dir}/lake_metrics_train.csv  ({len(lake_metrics_train_df)} train lakes)')
-    print(f'  -> {run_dir}/lake_metrics_val.csv    ({len(lake_metrics_val_df)} val lakes)')
-    print(f'  -> {run_dir}/lake_metrics_test.csv   ({len(lake_metrics_test_df)} test lakes)')
+    splits_info = [
+        ("train", train_df),
+        ("val",   val_df),
+        ("test",  test_df),
+    ]
 
-    # ── Median summary with 5th-95th percentile CI ────────────────────────────
+    for split_name, split_df in splits_info:
+        by_lead = compute_metrics_by_lead_day(split_df)
+
+        # Aggregate CSV: all lead days stacked
+        agg_df = pd.concat(by_lead.values(), ignore_index=True)
+        agg_csv = run_dir / f"lake_metrics_{split_name}.csv"
+        agg_df.to_csv(agg_csv, index=False)
+
+        # Per-lead-day CSVs
+        for d, mdf in by_lead.items():
+            mdf.to_csv(run_dir / f"lake_metrics_{split_name}_lead{d}.csv", index=False)
+
+        n_lakes = len(split_df['lake_id'].unique()) if len(split_df) > 0 else 0
+        print(f'Per-lake metrics saved ({split_name}, {n_lakes} lakes, '
+              f'{len(lead_days)} lead days):')
+        print(f'  -> {agg_csv.name}  (all lead days stacked)')
+        for d in lead_days:
+            print(f'  -> lake_metrics_{split_name}_lead{d}.csv')
+
+    # ── Median summary broken down by lead day ────────────────────────────────
     metric_cols = ['mse_m2', 'rmse_m', 'mae_m', 'nse', 'kge', 'autocorr',
                    'crps_m', 'cov90', 'piw90_m']
 
-    def _print_summary(label: str, mdf: pd.DataFrame) -> None:
-        cols = [c for c in metric_cols if c in mdf.columns]
-        print(f'\n=== {label} — Median Per-Lake Metrics (5th–95th CI) ===')
-        for col in cols:
-            med = mdf[col].median()
-            lo  = mdf[col].quantile(0.05)
-            hi  = mdf[col].quantile(0.95)
-            print(f'  {col:<12}: {med:6.3f}  ({lo:.3f} – {hi:.3f})')
+    def _print_lead_summary(label: str, split_df: pd.DataFrame) -> None:
+        print(f'\n=== {label} — Median Per-Lake Metrics by Lead Day (5th–95th CI) ===')
+        by_lead = compute_metrics_by_lead_day(split_df)
+        for d, mdf in sorted(by_lead.items()):
+            cols = [c for c in metric_cols if c in mdf.columns]
+            parts = []
+            for col in cols:
+                med = mdf[col].median()
+                lo  = mdf[col].quantile(0.05)
+                hi  = mdf[col].quantile(0.95)
+                parts.append(f'{col}: {med:.3f} ({lo:.3f}–{hi:.3f})')
+            print(f'  lead_day={d}  |  ' + '  |  '.join(parts))
 
-    _print_summary("Train lakes", lake_metrics_train_df)
-    _print_summary("Val lakes",   lake_metrics_val_df)
-    _print_summary("Test lakes",  lake_metrics_test_df)
+    _print_lead_summary("Train lakes", train_df)
+    _print_lead_summary("Val lakes",   val_df)
+    _print_lead_summary(f"Test lakes [{region_name}]", test_df)
+
+    # ── Save inference_metrics.json (aggregate median per split × lead day) ───
+    def _agg_metrics_json(split_df: pd.DataFrame) -> dict:
+        result = {}
+        by_lead = compute_metrics_by_lead_day(split_df)
+        for d, mdf in sorted(by_lead.items()):
+            cols = [c for c in metric_cols if c in mdf.columns]
+            result[f"lead{d}"] = {
+                col: {
+                    "median": float(mdf[col].median()),
+                    "p05":    float(mdf[col].quantile(0.05)),
+                    "p95":    float(mdf[col].quantile(0.95)),
+                }
+                for col in cols
+                if not mdf[col].isna().all()
+            }
+        return result
+
+    inference_metrics = {
+        "fold_idx":         args.fold_idx,
+        "region_name":      region_name,
+        "forecast_horizon": forecast_horizon,
+        "n_lead_days":      len(lead_days),
+        "lead_days":        lead_days,
+        "train": _agg_metrics_json(train_df),
+        "val":   _agg_metrics_json(val_df),
+        "test":  _agg_metrics_json(test_df),
+    }
+    inf_metrics_path = run_dir / "inference_metrics.json"
+    with open(inf_metrics_path, "w") as f:
+        json.dump(inference_metrics, f, indent=2)
+    print(f'\nAggregate inference metrics saved → {inf_metrics_path}')
 
 
 if __name__ == "__main__":

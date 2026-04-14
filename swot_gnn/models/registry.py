@@ -22,7 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.swot_gnn import SWOTGNN
 from models.swot_gnn_gauss import SWOTGNNGauss
-from training.train import ObservedMSELoss, ObservedGaussianNLLLoss, ObservedGaussianCRPSLoss
+from training.train import (
+    ObservedMSELoss,
+    ObservedMSELossMultiStep,
+    ObservedGaussianNLLLoss,
+    ObservedGaussianCRPSLoss,
+    ObservedGaussianCRPSLossMultiStep,
+)
 
 
 @dataclass
@@ -35,6 +41,7 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
+    # ── 1-day-ahead (wse1d) models ───────────────────────────────────────────
     "SWOTGNN": ModelSpec(
         model_cls=SWOTGNN,
         loss_cls=ObservedMSELoss,
@@ -52,5 +59,21 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         loss_cls=ObservedGaussianCRPSLoss,
         output_mode="gaussian",
         slug="swotgnn_gauss_crps",
+    ),
+    # ── Multi-day (wsend) models ─────────────────────────────────────────────
+    # Same architecture as wse1d; forecast_horizon > 1 is set via the config.
+    # Uses ObservedMSELossMultiStep which averages over all (lake, lead_day)
+    # pairs where obs_mask=1 across the full forecast horizon.
+    "SWOTGNNMultiStep": ModelSpec(
+        model_cls=SWOTGNN,
+        loss_cls=ObservedMSELossMultiStep,
+        output_mode="point",
+        slug="swotgnn_nd",
+    ),
+    "SWOTGNNMultiStepGaussCRPS": ModelSpec(
+        model_cls=SWOTGNNGauss,
+        loss_cls=ObservedGaussianCRPSLossMultiStep,
+        output_mode="gaussian",
+        slug="swotgnn_nd_gauss_crps",
     ),
 }

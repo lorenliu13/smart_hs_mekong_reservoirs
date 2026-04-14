@@ -1,10 +1,10 @@
 """
-Temporal graph dataset for lake-based SWOT-GNN with 10-day multi-step forecasting.
+Temporal graph dataset for lake-based SWOT-GNN multi-step forecasting.
 
 Each training sample is indexed by an ECMWF init_date and contains:
-  - History window (seq_len=30 days): ERA5-Land climate + SWOT WSE features
-  - Forecast window (forecast_horizon=10 days): ECMWF IFS climate + zeroed SWOT features
-  - Labels: WSE at init_date + days 0..9 (shape: n_lakes × 10)
+  - History window (seq_len days): ERA5-Land climate + SWOT WSE features
+  - Forecast window (forecast_horizon days): ECMWF IFS climate + zeroed SWOT features
+  - Labels: WSE at init_date + days 0..forecast_horizon-1 (shape: n_lakes × forecast_horizon)
   - Mask:   obs_mask at those forecast dates
 
 Data flow:
@@ -16,10 +16,10 @@ Data flow:
     │                 latest_wse, …                    │                   │
     │         │                                        │                   │
     │  swot_lake_era5_climate_datacube.nc              │                   │
-    │  (lake, time) → LWd, SWd, P, …                   │                   │
+    │  (lake, time) → LWd, SWd, P, …                  │                   │
     │         │                                        │                   │
     │  swot_lake_ecmwf_forecast_datacube.nc            │                   │
-    │  (lake, init_time, lead_day) → LWd, SWd, P, …    │                   │
+    │  (lake, init_time, lead_day) → LWd, SWd, P, …   │                   │
     │         │                                        │                   │
     └─────────┼────────────────────────────────────────┼───────────────────┘
               │                                        │
@@ -44,20 +44,20 @@ Data flow:
               │  __getitem__(idx)  →  one sample per ECMWF init_date
               │
               ▼
-    ┌─────────────────────────────────────────────────────────────────┐
-    │  One training sample                                            │
-    │                                                                 │
-    │  t=0 ──────────────── t=29 │ t=30 ────────────────── t=39       │
-    │  ◄── ERA5 history (30d) ──► │ ◄── ECMWF forecast (10d) ──►      │
-    │  SWOT features (8) filled   │ SWOT features (6) zeroed out      │
-    │  ERA5 climate  (13) filled  │ DOY sin/cos (2) kept              │
-    │                             │ ECMWF climate  (13) filled        │
-    │                                                                 │
-    │  data_list : list[PyG Data] × 40  — one graph snapshot/step     │
-    │  static    : Tensor (n_lakes, n_static)                         │
-    │  labels    : Tensor (n_lakes, 10)  — WSE, NaN→0                 │
-    │  label_mask: Tensor (n_lakes, 10)  — 1 where SWOT observed      │
-    └─────────────────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │  One training sample  (example: seq_len=30, forecast_horizon=5)      │
+    │                                                                      │
+    │  t=0 ──────────────── t=29 │ t=30 ────── t=34                        │
+    │  ◄── ERA5 history (30d) ──► │ ◄─ ECMWF forecast (5d) ──►             │
+    │  SWOT features (8) filled   │ SWOT features (6) zeroed out           │
+    │  ERA5 climate  (13) filled  │ DOY sin/cos (2) kept                   │
+    │                             │ ECMWF climate  (13) filled             │
+    │                                                                      │
+    │  data_list : list[PyG Data] × (seq_len+forecast_horizon)             │
+    │  static    : Tensor (n_lakes, n_static)                              │
+    │  labels    : Tensor (n_lakes, forecast_horizon)  — WSE, NaN→0        │
+    │  label_mask: Tensor (n_lakes, forecast_horizon)  — 1 where observed  │
+    └──────────────────────────────────────────────────────────────────────┘
 
 Usage:
     train_ds, val_ds, test_ds, norm_stats = build_temporal_dataset_from_lake_datacubes(
@@ -210,14 +210,14 @@ def assemble_lake_features_from_datacubes(
 
 class TemporalGraphDatasetLake(Dataset):
     """
-    Dataset for 10-day-ahead multi-step WSE forecasting for lakes.
+    Dataset for multi-step WSE forecasting for lakes.
 
-    Each sample:
-      Given 30 days of ERA5 history + 10 ECMWF forecast days → predict WSE for those 10 days.
+    Each sample: seq_len days of ERA5 history + forecast_horizon ECMWF forecast days
+    → predict WSE at each of the forecast_horizon lead days.
 
     Input tensor shape: (n_lakes, seq_len+forecast_horizon, SWOT_DIM+CLIMATE_DIM)
-      - Timesteps  0-(seq_len-1): ERA5 history (SWOT features + ERA5 climate)
-      - Timesteps  seq_len-end:   ECMWF forecast (zeroed SWOT features + ECMWF climate + DOY encoding)
+      - Timesteps 0 to seq_len-1:              ERA5 history (SWOT features + ERA5 climate)
+      - Timesteps seq_len to seq_len+horizon-1: ECMWF forecast (zeroed SWOT + ECMWF climate + DOY)
 
     Labels shape: (n_lakes, forecast_horizon) — WSE at each forecast day (NaN→0, use mask).
     Mask shape:   (n_lakes, forecast_horizon) — 1 where SWOT observed, 0 otherwise.
@@ -304,18 +304,17 @@ class TemporalGraphDatasetLake(Dataset):
         self, idx: int
     ) -> Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        
-        For the given sample index, construct the input feature sequence, labels, and mask.
+        Construct the input feature sequence, labels, and mask for one sample.
 
-        Inputs:
-            idx: index into self.valid_starts, which maps to a valid ECMWF init_date with full ERA5 history coverage.
+        Args:
+            idx: index into self.valid_starts, which maps to a valid ECMWF init_date
+                 with full ERA5 history coverage.
 
-        Returns: 
-            data_list: list of PyG Data objects, one per timestep (length seq_len + forecast_horizon)
-            static: Tensor of shape (n_lakes, n_static) — static features for all lakes
-            labels: Tensor of shape (n_lakes, forecast_horizon) — WSE values for forecast days (NaN→0)
-            label_mask: Tensor of shape (n_lakes, forecast_horizon) — 1 where SWOT observed, 0 otherwise
-
+        Returns:
+            data_list:  list of PyG Data, one per timestep (length seq_len + forecast_horizon)
+            static:     (n_lakes, n_static) — static features for all lakes
+            labels:     (n_lakes, forecast_horizon) — WSE at each forecast day (NaN→0)
+            label_mask: (n_lakes, forecast_horizon) — 1 where SWOT observed, 0 otherwise
         """
 
         # Map dataset index → position in ecmwf_init_dates (skips invalid starts)
@@ -331,13 +330,13 @@ class TemporalGraphDatasetLake(Dataset):
         era5_start_idx = era5_end_idx - self.seq_len + 1       # inclusive start
 
         history = self.era5_dynamic[:, era5_start_idx : era5_end_idx + 1, :]
-        # shape: (n_lakes, seq_len=30, SWOT_DIM+CLIMATE_DIM=14)
+        # shape: (n_lakes, seq_len, SWOT_DIM+CLIMATE_DIM=21)
 
-        # ── ECMWF forecast window (timesteps 30–39) ───────────────────────────
-        # For the forecast horizon we don't have observed SWOT data yet, so the
-        # SWOT-derived slots are zeroed out. Only climate and DOY are populated.
+        # ── ECMWF forecast window (timesteps seq_len to seq_len+forecast_horizon-1) ──
+        # No observed SWOT data exists for future timesteps, so SWOT-derived slots
+        # are zeroed out. Only DOY encoding and ECMWF climate are populated.
         #
-        # Feature layout within each timestep (total 14 dims):
+        # Feature layout within each forecast timestep (total 21 dims):
         #   [0] obs_mask            → 0 (no observation available in future)
         #   [1] latest_wse          → 0 (unknown)
         #   [2] latest_wse_u        → 0
@@ -346,7 +345,7 @@ class TemporalGraphDatasetLake(Dataset):
         #   [5] days_since_last_obs → 0 (not meaningful in forecast window)
         #   [6] doy_sin             → computed from valid_date dayofyear
         #   [7] doy_cos             → computed from valid_date dayofyear
-        #   [8–13]                  → ECMWF climate variables (9 vars, SWOT_DIM=5 offset)
+        #   [8–20]                  → ECMWF climate variables (13 vars, offset by SWOT_DIM=8)
         ecmwf_slice = self.ecmwf_forecast[:, j, :self.forecast_horizon, :]  # (n_lakes, forecast_horizon, CLIMATE_DIM)
 
         fc_block = np.zeros(
@@ -361,20 +360,19 @@ class TemporalGraphDatasetLake(Dataset):
             fc_block[:, d, 6] = float(np.sin(2 * np.pi * doy / 365.25))
             fc_block[:, d, 7] = float(np.cos(2 * np.pi * doy / 365.25))
 
-        # Paste ECMWF climate into the trailing CLIMATE_DIM slots (after SWOT_DIM=5 zeros)
+        # Paste ECMWF climate into the trailing CLIMATE_DIM slots (after SWOT_DIM=8 zeros)
         fc_block[:, :, SWOT_DIM:] = ecmwf_slice
-        # shape: (n_lakes, forecast_horizon=10, 14)
+        # shape: (n_lakes, forecast_horizon, SWOT_DIM+CLIMATE_DIM=21)
 
-        # ── Concatenate full 40-step sequence ─────────────────────────────────
-        # Axis 1 is the time dimension; history comes first, then forecast.
+        # ── Concatenate full sequence (seq_len + forecast_horizon timesteps) ──
         seq_features = np.concatenate([history, fc_block], axis=1)
-        # shape: (n_lakes, seq_len+forecast_horizon=40, SWOT_DIM+CLIMATE_DIM=14)
+        # shape: (n_lakes, seq_len+forecast_horizon, 21)
 
         # ── Labels and mask ───────────────────────────────────────────────────
-        # Look up actual SWOT WSE observations for each of the 10 forecast days.
-        # NaN WSE (lake not observed on that day) is replaced with 0; label_mask
-        # records which lakes were actually observed (1) vs missing (0).
-        # The model loss should only be computed where label_mask == 1.
+        # Look up SWOT WSE observations for each forecast day. NaN WSE (lake not
+        # observed on that day) is replaced with 0; label_mask records which lakes
+        # were actually observed (1) vs missing (0). Loss is only computed where
+        # label_mask == 1.
         labels     = np.zeros((self.n_lakes, self.forecast_horizon), dtype=np.float32)
         label_mask = np.zeros((self.n_lakes, self.forecast_horizon), dtype=np.float32)
 
@@ -387,26 +385,25 @@ class TemporalGraphDatasetLake(Dataset):
                 label_mask[:, d] = self.obs_mask[:, t_idx]
             # If target_date is not in ERA5 (beyond ERA5 coverage), labels/mask stay 0
 
-        # ── Build PyG Data list (one per timestep, 40 total) ──────────────────
-        # Each Data object is one temporal "snapshot" of the lake graph.
-        # The sequence of 40 Data objects is passed to the GNN encoder which
-        # processes them in order (e.g. with an RNN/Transformer over time).
+        # ── Build PyG Data list (one per timestep) ───────────────────────────
+        # Each Data object is one temporal snapshot of the lake graph.
+        # The full sequence is passed to the GNN encoder for temporal processing.
         data_list = [
             Data(
-                x=torch.from_numpy(seq_features[:, t, :]).float(),  # (n_lakes, 14)
+                x=torch.from_numpy(seq_features[:, t, :]).float(),  # (n_lakes, 21)
                 edge_index=self.edge_index,                          # (2, n_edges)
                 num_nodes=self.n_lakes,
             )
             for t in range(self.seq_len + self.forecast_horizon)
-        ] # dim: list of 40 Data objects, each with x shape (n_lakes, 14)
+        ]  # list of (seq_len+forecast_horizon) Data objects
 
         static = torch.from_numpy(self.static_features)  # (n_lakes, n_static)
 
         return (
-            data_list,                                     # list of 40 PyG Data objects
+            data_list,                                     # list of (seq_len+forecast_horizon) PyG Data
             static,                                        # (n_lakes, n_static)
-            torch.from_numpy(labels).float(),              # (n_lakes, forecast_horizon=10)
-            torch.from_numpy(label_mask).float(),          # (n_lakes, forecast_horizon=10)
+            torch.from_numpy(labels).float(),              # (n_lakes, forecast_horizon)
+            torch.from_numpy(label_mask).float(),          # (n_lakes, forecast_horizon)
         )
 
 
@@ -414,26 +411,24 @@ def collate_temporal_graph_batch_lake(
     batch: List[Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]],
 ) -> Tuple[List[List["Data"]], torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Create a batch of temporal graph samples by collating lists of PyG Data objects and tensors.
+    Collate a list of dataset samples into a batch.
 
-    Inputs: 
-    batch: List of samples, where each sample is a tuple of:
-        - data_list: list of 40 PyG Data objects (one per timestep)
-        - static: Tensor (n_lakes, n_static)
-        - labels: Tensor (n_lakes, 10)
-        - label_mask: Tensor (n_lakes, 10)
+    Each sample is a tuple of:
+        - data_list:  list of (seq_len+forecast_horizon) PyG Data objects
+        - static:     (n_lakes, n_static)
+        - labels:     (n_lakes, forecast_horizon)
+        - label_mask: (n_lakes, forecast_horizon)
+
     Returns:
-        data_lists:   batch size of [40 * PyG Data]
-        static_feats: (batch_size, n_lakes, n_static)
-        labels:       (batch_size, n_lakes, 10)
-        masks:        (batch_size, n_lakes, 10)
+        data_lists:   list of B sample data_lists
+        static_feats: (B, n_lakes, n_static)
+        labels:       (B, n_lakes, forecast_horizon)
+        masks:        (B, n_lakes, forecast_horizon)
     """
-
-    # 
-    data_lists   = [b[0] for b in batch] # B * list[40 * Data]
+    data_lists   = [b[0] for b in batch]
     static_feats = torch.stack([b[1] for b in batch])   # (B, n_lakes, n_static)
-    labels       = torch.stack([b[2] for b in batch])   # (B, n_lakes, 10)
-    masks        = torch.stack([b[3] for b in batch])   # (B, n_lakes, 10)
+    labels       = torch.stack([b[2] for b in batch])   # (B, n_lakes, forecast_horizon)
+    masks        = torch.stack([b[3] for b in batch])   # (B, n_lakes, forecast_horizon)
     return data_lists, static_feats, labels, masks
 
 
@@ -808,15 +803,13 @@ def build_spatial_cv_fold(
     # ── Random spatial fold assignment ────────────────────────────────────────
     # Shuffle lake array positions (not IDs) with the fixed seed, then chunk
     # into n_folds groups.  fold_idx picks the test chunk; all others are train.
-    rng = np.random.default_rng(spatial_split_seed) # deterministic shuffling of lake positions
-    shuffled_positions = rng.permutation(n_lakes_total)   # positions in lake_ids_out
-
-    # np.array_split produces n_folds chunks of as-equal-as-possible size
-    fold_chunks = np.array_split(shuffled_positions, n_folds) # list of n_folds arrays of lake positions
-    test_positions  = fold_chunks[fold_idx]               # dim: (n_test_lakes,) positions of test lakes in the original arrays
+    rng = np.random.default_rng(spatial_split_seed)
+    shuffled_positions = rng.permutation(n_lakes_total)
+    fold_chunks    = np.array_split(shuffled_positions, n_folds)
+    test_positions = fold_chunks[fold_idx]
     train_positions = np.concatenate(
         [fold_chunks[i] for i in range(n_folds) if i != fold_idx]
-    ) # remaining positions → train (includes val in both val_method modes)
+    )
 
     print(
         f"Spatial CV fold {fold_idx + 1}/{n_folds}: "
@@ -825,18 +818,10 @@ def build_spatial_cv_fold(
     )
 
     # ── Find all valid init_date positions ────────────────────────────────────
-    era5_date_to_idx = {d: i for i, d in enumerate(era5_dates)} 
-    # A reverse lookup to find the index of any given dates
-    # era5_dates: is a list of all dates in the ERA5 time series
-    # {pd.Timestamp('1980-01-01 00:00:00'): 0, pd.Timestamp('1980-01-02 00:00:00'): 1, ...}
+    era5_date_to_idx = {d: i for i, d in enumerate(era5_dates)}
 
-    # Loop through each ECMWF initialize date
-    # Check if it has a full ERA5 history window before it 
-    # Check if it has a SWOT observation on the forecast days
-    # all_valid: list of indices of ecmwf_init_dates that meet the criteria to be included in the dataset
-    # criteria: 
-    # 1) There must be a full seq_len ERA5 history before the init_date (i.e., era5_idx >= seq_len - 1)
-    # 2） If require_obs_on_any_forecast_day is True, at least one of the forecast days must have a SWOT observation (obs_mask sum > 0)
+    # Keep only init_dates that have (1) a full seq_len ERA5 history window before
+    # them and (2) at least one SWOT observation within the forecast window.
     all_valid = []
     for j, init_date in enumerate(ecmwf_init_dates):
         last_hist_day = init_date - pd.Timedelta(days=1)
@@ -857,9 +842,7 @@ def build_spatial_cv_fold(
 
         all_valid.append(j)
 
-    # Convert to numpy array for easier indexing later; also get the count of valid init_dates
     all_valid = np.array(all_valid, dtype=np.int64)
-    # Get number of valid init_dates that will be used for splitting into train/val/test
     n_valid   = len(all_valid)
 
     if n_valid == 0:
@@ -895,15 +878,12 @@ def build_spatial_cv_fold(
         val_idx   = all_valid
         test_idx  = all_valid
 
-        # Randomly hold out a spatial_val_frac fraction of the train-fold lakes as a spatial val set.
-        rng_val = np.random.default_rng(spatial_split_seed + 1)
-        # Get the number of lakes to hold out for validation, ensuring at least one lake is in the val set
+        # Randomly draw spatial_val_frac of train-fold lakes as validation.
+        rng_val        = np.random.default_rng(spatial_split_seed + 1)
         n_spatial_val  = max(1, int(len(train_positions) * spatial_val_frac))
-        # Permutation of train_positions to randomly select lakes for spatial validation
         perm           = rng_val.permutation(len(train_positions))
-        # Get the positions of the lakes for validation and training based on the random permutation
-        val_active_positions   = train_positions[perm[:n_spatial_val]] # dim: (n_val_lakes,) positions of val lakes in the original arrays
-        train_active_positions = train_positions[perm[n_spatial_val:]] # dim: (n_train_lakes,) positions of train-train lakes in the original arrays
+        val_active_positions   = train_positions[perm[:n_spatial_val]]
+        train_active_positions = train_positions[perm[n_spatial_val:]]
 
         # Normalization source: train-train lakes only (no val or test lake leakage)
         norm_positions = train_active_positions
@@ -924,8 +904,8 @@ def build_spatial_cv_fold(
     # 5： days_since_last_obs, 10: P, 15: sf — all right-skewed, zero-bounded → log1p + z-score
     _ZSCORE_DYN = [2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
-    era5_dynamic   = era5_dynamic.copy() # dim： (n_lakes, n_era5_dates, n_features)
-    ecmwf_forecast = ecmwf_forecast.copy() # dim: (n_lakes, n_ecmwf_init_dates, forecast_horizon, n_climate_features)
+    era5_dynamic   = era5_dynamic.copy()
+    ecmwf_forecast = ecmwf_forecast.copy()
 
     # Step 1: log1p on skewed features (all lakes, all dates)
     for i in _LOG1P_DYN:
@@ -939,7 +919,7 @@ def build_spatial_cv_fold(
     dyn_std  = np.ones(n_dyn,  dtype=np.float32)
 
     for i in _ZSCORE_DYN:
-        vals        = norm_era5_slice[:, :, i].ravel() # dim: (n_norm_lakes * n_dates,) all values for this feature across the norm_positions lakes and all dates
+        vals        = norm_era5_slice[:, :, i].ravel()
         dyn_mean[i] = float(vals.mean())
         dyn_std[i]  = float(vals.std()) + 1e-8
 
@@ -951,10 +931,8 @@ def build_spatial_cv_fold(
     ecmwf_log1p_indices  = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _LOG1P_DYN]
     ecmwf_zscore_indices = [k for k, _ in enumerate(ECMWF_CLIMATE_VARS) if (SWOT_DIM + k) in _ZSCORE_DYN]
 
-    # Apply log1p to ECMWF variables of precipitaiton and snowfall
     for k in ecmwf_log1p_indices:
         ecmwf_forecast[:, :, :, k] = np.log1p(np.clip(ecmwf_forecast[:, :, :, k], 0, None))
-    # Apply z-score to ECMWF climate features using the same ERA5-derived mean/std for consistency
     for k in ecmwf_zscore_indices:
         era5_idx = SWOT_DIM + k
         ecmwf_forecast[:, :, :, k] = (
@@ -1010,15 +988,9 @@ def build_spatial_cv_fold(
         m[positions] = 1.0
         return torch.from_numpy(m)
 
-    # get the mask for each dataset 
-    train_mask_t = _make_mask(train_active_positions)
-    val_mask_t   = _make_mask(val_active_positions)
-    test_mask_t  = _make_mask(test_positions)
-
-    # Each dataset carries the mask for its own active lakes.
-    train_ds.spatial_mask = train_mask_t # dim: (n_lakes,) 1 for train-train lakes, 0 for val/test lakes
-    val_ds.spatial_mask   = val_mask_t # dimn: (n_lakes,) 1 for val lakes (either same as train or a subset), 0 for train-train and test lakes
-    test_ds.spatial_mask  = test_mask_t
+    train_ds.spatial_mask = _make_mask(train_active_positions)
+    val_ds.spatial_mask   = _make_mask(val_active_positions)
+    test_ds.spatial_mask  = _make_mask(test_positions)
 
     print(
         f"Spatial CV datasets built: "

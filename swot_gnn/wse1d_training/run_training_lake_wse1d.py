@@ -33,7 +33,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.temporal_graph_dataset_lake import (
     build_temporal_dataset_from_lake_datacubes,
@@ -280,7 +280,7 @@ def train(cfg, args):
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    script_dir = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
         description="1-day-ahead lake WSE forecasting (SWOT-GNN)"
     )

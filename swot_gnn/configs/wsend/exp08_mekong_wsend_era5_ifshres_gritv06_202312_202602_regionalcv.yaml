@@ -1,0 +1,63 @@
+# Experiment 08: Multi-day lake WSE forecasting — regional 5-fold cross-validation
+#
+# Task:   Extend exp07 to forecast WSE at all 5 lead days simultaneously
+#         (direct multi-step).  One regional fold is held out as the test set.
+#
+# Multi-day training strategy:
+#   A sample is valid if at least one SWOT observation falls within the 5-day
+#   forecast window (require_obs_on_any_forecast_day=True).  The model predicts
+#   WSE at all 5 lead days in one forward pass; loss is computed over all
+#   (lake, lead_day) pairs where obs_mask=1 (ObservedGaussianCRPSLossMultiStep).
+#   This reuses each ECMWF init_date across all lead days that have observations,
+#   substantially increasing effective training signal given SWOT's ~21-day repeat.
+#
+# Validation strategy: --val-method spatial
+#   Hold out spatial_val_frac of train-region lakes (all dates) for validation.
+#
+# Input:  (n_lakes, 35, 21)
+#   Timesteps  0-29 : historical ERA5 + SWOT (seq_len=30)
+#              feat  0-7 : SWOT WSE block (obs_mask, latest_wse, latest_wse_u,
+#                          latest_wse_std, latest_area_total, days_since_last_obs,
+#                          doy_sin, doy_cos)
+#              feat  8-20: ERA5-Land climate (LWd, SWd, P, Pres, Temp, Td,
+#                          Wind, sf, sd, swvl1, swvl2, swvl3, swvl4)
+#   Timesteps 30-34 : ECMWF IFS 5-day forecast (forecast_horizon=5)
+#              feat  0-5 : zeroed (no SWOT observation at forecast steps)
+#              feat  6-7 : doy_sin/cos for each forecast date
+#              feat  8-20: 13 ECMWF climate variables (same order as ERA5)
+#
+# Output: (n_lakes, 5) × 2 — Gaussian mean and log_std at lead days 1–5
+#
+# Loss:   ObservedGaussianCRPSLossMultiStep — closed-form Gaussian CRPS averaged
+#         over all (lake, lead_day) pairs where obs_mask=1.
+#         During training/validation: loss gated to train-fold lakes only.
+#         During test evaluation:     loss gated to held-out test-fold lakes.
+#
+# Normalisation statistics are derived from training lakes only.
+#
+model:
+  model_type: SWOTGNNMultiStepGaussCRPS    # SWOTGNNGauss with ObservedGaussianCRPSLossMultiStep
+  swot_dim: 8                     # obs_mask, latest_wse, latest_wse_u, latest_wse_std,
+                                  # latest_area_total, days_since_last_obs, doy_sin, doy_cos
+  climate_dim: 13                 # LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd, swvl1-4
+  static_embed_dim: 16
+  embed_dim: 64
+  hidden_dim: 64
+  st_blocks: 1
+  gps_layers_per_block: 2
+  gps_heads: 4
+  dropout: 0.1
+  forecast_horizon: 5             # 5-day-ahead (output shape: n_lakes × 5)
+  # static_dim is auto-detected from the datacube at runtime and injected here
+
+training:
+  seq_len: 30                     # ERA5/SWOT history window (days before init_date)
+  forecast_horizon: 5            # ECMWF lead days used as input / days predicted
+  total_seq_len: 35               # seq_len + forecast_horizon (informational)
+  # val_frac: 0.15                  # fraction of init_dates held back for temporal val
+  # val_frac is unused with --val-method spatial; spatial_val_frac is a CLI arg
+  batch_size: 16
+  lr: 0.001
+  num_epochs: 100
+  patience: 20                    # early-stop if val loss does not improve for 20 epochs
+  grad_clip: 1.0

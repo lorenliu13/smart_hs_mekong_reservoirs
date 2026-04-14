@@ -1,5 +1,5 @@
 """
-Regional spatial cross-validation for 1-day-ahead lake WSE forecasting.
+Regional spatial cross-validation for multi-day lake WSE forecasting.
 
 Lakes are split into 5 geographic regions (see data/regional_cv.py).  One
 region is held out as the test set; the remaining four are used for training
@@ -12,26 +12,33 @@ Region → fold index:
     3: Khorat Plateau                             (~25%)
     4: Tonle Sap Basin + 3S Basin                 (~19%)
 
-Key differences from run_training_lake_wse1d_spatial_cv.py (random split):
-  - Uses build_regional_cv_fold instead of build_spatial_cv_fold.
-  - No --n-folds or --spatial-seed: regions are fixed by REGIONAL_FOLD_MAP.
-  - --lake-graph must include the hybasin_level_4 column (HYBAS Level-4 ID).
-  - Run directory: save_dir / base_run_name / fold_{fold_idx}/
+Multi-day forecasting strategy:
+    A training sample is valid if at least one SWOT observation exists for any
+    lake on any forecast day within [init_date, init_date + forecast_horizon - 1].
+    The model predicts WSE at all forecast_horizon lead days simultaneously
+    (direct multi-step).  Loss is computed over all (lake, lead_day) pairs where
+    obs_mask=1, averaged across the batch (ObservedMSELossMultiStep).
+
+Key differences from wse1d_training/run_training_lake_wse1d_regional_cv.py:
+  - Imports _run_epoch_nd from training.train_nd (handles (B*N, H) labels/masks).
+  - forecast_horizon > 1 is expected; an assertion enforces this.
+  - Run name encodes forecast_horizon: _h{H} suffix.
+  - test_metrics.json and registry row include forecast_horizon.
 
 Usage:
-  python run_training_lake_wse1d_regional_cv.py \\
-    --config          configs/exp01_nextday_wse.yaml \\
+  python run_training_lake_wsend_regional_cv.py \\
+    --config          configs/wsend/exp08_wsend.yaml \\
     --wse-datacube    /path/to/swot_lake_wse_datacube_wse_norm.nc \\
     --era5-datacube   /path/to/swot_lake_era5_climate_datacube.nc \\
     --ecmwf-datacube  /path/to/swot_lake_ecmwf_forecast_datacube.nc \\
     --static-datacube /path/to/swot_lake_static_datacube.nc \\
     --lake-graph      /path/to/gritv06_great_mekong_pld_lake_graph_0sqkm.csv \\
-    --run-name        exp01_regionalcv \\
+    --run-name        exp08_wsend_regionalcv \\
     --fold-idx        0
 
 Launch all folds (bash example):
   for i in 0 1 2 3 4; do
-    python run_training_lake_wse1d_regional_cv.py ... --fold-idx $i &
+    python run_training_lake_wsend_regional_cv.py ... --fold-idx $i &
   done
 """
 import argparse
@@ -58,7 +65,7 @@ from data.regional_cv import (
 )
 from data.temporal_graph_dataset_lake import collate_temporal_graph_batch_lake
 from models.registry import MODEL_REGISTRY
-from training.train import _run_epoch
+from training.train_nd import _run_epoch_nd
 
 
 # ── Main training routine ──────────────────────────────────────────────────────
@@ -75,7 +82,12 @@ def train(cfg, args):
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
 
+    forecast_horizon = cfg["training"]["forecast_horizon"]
+
     # ── Build regional CV datasets ──────────────────────────────────────────
+    # require_obs_on_any_forecast_day=True (default) filters out init_dates
+    # where no SWOT observation falls within the forecast window, ensuring
+    # every sample contributes at least one gradient update.
     train_ds, val_ds, test_ds, norm_stats = build_regional_cv_fold(
         wse_datacube_path            = args.wse_datacube,
         era5_climate_datacube_path   = args.era5_datacube,
@@ -83,13 +95,14 @@ def train(cfg, args):
         static_datacube_path         = args.static_datacube,
         lake_graph_path              = args.lake_graph,
         seq_len                      = cfg["training"]["seq_len"],
-        forecast_horizon             = cfg["training"]["forecast_horizon"],
+        forecast_horizon             = forecast_horizon,
         fold_idx                     = args.fold_idx,
         val_frac                     = cfg["training"].get("val_frac", 0.15),
         val_method                   = args.val_method,
         spatial_val_frac             = args.spatial_val_frac,
         spatial_val_seed             = args.spatial_val_seed,
         hybas_col                    = args.hybas_col,
+        require_obs_on_any_forecast_day = True,
     )
 
     # Auto-detect static_dim from the loaded datacube and override config placeholder
@@ -113,7 +126,7 @@ def train(cfg, args):
 
     # ── Model ───────────────────────────────────────────────────────────────
     model_cfg  = dict(cfg["model"])
-    model_type = model_cfg.pop("model_type", "SWOTGNN")
+    model_type = model_cfg.pop("model_type", "SWOTGNNMultiStep")
     spec       = MODEL_REGISTRY[model_type]
     model      = spec.model_cls(**model_cfg).to(device)
     criterion  = spec.loss_cls()
@@ -146,11 +159,11 @@ def train(cfg, args):
 
     for epoch in range(cfg["training"]["num_epochs"]):
         epoch_start = time.time()
-        avg_train = _run_epoch(model, train_loader, criterion, device,
-                               optimizer=optimizer, grad_clip=grad_clip,
-                               spatial_mask=train_spatial_mask)
-        avg_val   = _run_epoch(model, val_loader,   criterion, device,
-                               spatial_mask=val_spatial_mask)
+        avg_train = _run_epoch_nd(model, train_loader, criterion, device,
+                                  optimizer=optimizer, grad_clip=grad_clip,
+                                  spatial_mask=train_spatial_mask)
+        avg_val   = _run_epoch_nd(model, val_loader,   criterion, device,
+                                  spatial_mask=val_spatial_mask)
         epoch_secs = time.time() - epoch_start
 
         train_losses.append(avg_train)
@@ -195,21 +208,21 @@ def train(cfg, args):
     print(f"\nEvaluating on held-out test region [{REGION_NAMES[args.fold_idx]}] …")
     state_dict = torch.load(final_ckpt, map_location="cpu", weights_only=True)
     model.load_state_dict(state_dict)
-    test_loss = _run_epoch(model, test_loader, criterion, device,
-                           spatial_mask=test_spatial_mask)
+    test_loss = _run_epoch_nd(model, test_loader, criterion, device,
+                              spatial_mask=test_spatial_mask)
     print(f"Test loss (held-out region): {test_loss:.4f}")
 
     # ── Re-save checkpoint with full training history ─────────────────────────
     torch.save({
         "model_state_dict": state_dict,
-        "train_losses":  train_losses,
-        "val_losses":    val_losses,
-        "best_epoch":    best_epoch,
-        "best_val_loss": best_val_loss,
-        "test_loss":     test_loss,
-        "stopped_early": stopped_early,
-        "norm_stats":    norm_stats,
-        "config":        cfg,
+        "train_losses":     train_losses,
+        "val_losses":       val_losses,
+        "best_epoch":       best_epoch,
+        "best_val_loss":    best_val_loss,
+        "test_loss":        test_loss,
+        "stopped_early":    stopped_early,
+        "norm_stats":       norm_stats,
+        "config":           cfg,
     }, final_ckpt)
 
     # ── Save training_log.csv ────────────────────────────────────────────────
@@ -222,22 +235,23 @@ def train(cfg, args):
 
     # ── Save test_metrics.json ───────────────────────────────────────────────
     test_metrics = {
-        "fold_idx":      args.fold_idx,
-        "region_name":   REGION_NAMES[args.fold_idx],
-        "n_test_lakes":  int(norm_stats["n_test_lakes"]),
-        "n_unassigned":  int(norm_stats["n_unassigned"]),
-        "test_loss":     float(test_loss),
-        "best_val_loss": float(best_val_loss),
+        "fold_idx":          args.fold_idx,
+        "region_name":       REGION_NAMES[args.fold_idx],
+        "forecast_horizon":  forecast_horizon,
+        "n_test_lakes":      int(norm_stats["n_test_lakes"]),
+        "n_unassigned":      int(norm_stats["n_unassigned"]),
+        "test_loss":         float(test_loss),
+        "best_val_loss":     float(best_val_loss),
     }
     with open(run_dir / "test_metrics.json", "w") as f:
         json.dump(test_metrics, f, indent=2)
 
     # ── Append to registry.csv ───────────────────────────────────────────────
-    registry_path = Path(args.save_dir) / "registry_regional_cv.csv"
+    registry_path = Path(args.save_dir) / "registry_wsend_regional_cv.csv"
     exp_id        = args.run_name.split("_")[0]
     reg_header = [
         "run_name", "exp_id", "seed", "fold_idx", "region_name",
-        "n_train_lakes", "n_test_lakes",
+        "forecast_horizon", "n_train_lakes", "n_test_lakes",
         "best_epoch", "best_val_loss", "test_loss",
         "total_epochs", "stopped_early", "runtime_min",
         "lr", "seq_len", "st_blocks", "status",
@@ -248,6 +262,7 @@ def train(cfg, args):
         args.seed,
         args.fold_idx,
         REGION_NAMES[args.fold_idx],
+        forecast_horizon,
         norm_stats["n_train_lakes"],
         norm_stats["n_test_lakes"],
         best_epoch + 1,
@@ -278,7 +293,7 @@ def train(cfg, args):
     ax.axvline(best_epoch + 1, color="gray", linestyle="--",
                label=f"Best (epoch {best_epoch + 1})")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss (observed lakes)")
+    ax.set_ylabel(f"Loss — {forecast_horizon}-day forecast (observed lakes)")
     ax.set_title(
         f"{args.run_name}  —  fold {args.fold_idx} [{REGION_NAMES[args.fold_idx]}]"
     )
@@ -339,11 +354,11 @@ def train(cfg, args):
 def main():
     script_dir = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
-        description="Regional CV — 1-day-ahead lake WSE forecasting (SWOT-GNN)"
+        description="Regional CV — multi-day lake WSE forecasting (SWOT-GNN)"
     )
     parser.add_argument(
-        "--config", default=str(script_dir / "configs" / "default.yaml"),
-        help="Path to YAML config (default: configs/default.yaml)",
+        "--config", default=str(script_dir / "configs" / "wsend" / "default.yaml"),
+        help="Path to YAML config (default: configs/wsend/default.yaml)",
     )
     parser.add_argument("--wse-datacube",    required=True)
     parser.add_argument("--era5-datacube",   required=True)
@@ -360,7 +375,7 @@ def main():
     parser.add_argument("--save-dir",  default="checkpoints",
                         help="Root directory for all run outputs")
     parser.add_argument("--run-name",  required=True,
-                        help="Base run name; fold and model slug are appended automatically")
+                        help="Base run name; fold, horizon, and model slug are appended automatically")
     parser.add_argument("--fold-idx",  type=int, required=True,
                         help="Which region to hold out as the test set (0–4)")
     parser.add_argument(
@@ -399,11 +414,17 @@ def main():
     if args.seed is None:
         args.seed = cfg.get("seed", 42)
 
-    model_type = cfg["model"].get("model_type", "SWOTGNN")
+    forecast_horizon = cfg["training"]["forecast_horizon"]
+    assert forecast_horizon > 1, (
+        f"run_training_lake_wsend_regional_cv.py is designed for forecast_horizon > 1, "
+        f"got {forecast_horizon}. Use wse1d_training/ scripts for 1-day-ahead forecasting."
+    )
+
+    model_type = cfg["model"].get("model_type", "SWOTGNNMultiStep")
     model_slug = MODEL_REGISTRY[model_type].slug
 
-    # Encode fold, val method, and seed in the run folder name for traceability.
-    # Example: exp01_regionalcv_fold0of5_valt_swotgnn_s42
+    # Encode fold, horizon, val method, and seed in the run folder name.
+    # Example: exp08_wsend_regionalcv_fold0of5_h10_valt_swotgnn_nd_s42
     val_tag = (
         f"_valsp{args.spatial_val_frac}" if args.val_method == "spatial"
         else "_valt"
@@ -412,13 +433,10 @@ def main():
     args.run_name = (
         f"{args.run_name}"
         f"_fold{args.fold_idx}of{N_REGIONAL_FOLDS}"
+        f"_h{forecast_horizon}"
         f"{val_tag}"
         f"_{model_slug}"
         f"_s{args.seed}"
-    )
-
-    assert cfg["training"]["forecast_horizon"] == 1, (
-        "run_training_lake_wse1d_regional_cv.py is designed for forecast_horizon=1."
     )
 
     train(cfg, args)
