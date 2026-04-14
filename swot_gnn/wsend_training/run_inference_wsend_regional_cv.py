@@ -296,7 +296,7 @@ def compute_metrics_by_lead_day(df: pd.DataFrame) -> dict[int, pd.DataFrame]:
 
     Returns a dict mapping lead_day index → per-lake metrics DataFrame.
     """
-    lead_days = sorted(df['lead_day'].unique())
+    lead_days = [int(d) for d in sorted(df['lead_day'].unique())]
     return {d: compute_lake_metrics(df, lead_day=d) for d in lead_days}
 
 
@@ -548,7 +548,7 @@ def main():
     # ── Per-lake metrics broken down by lead day ──────────────────────────────
     # For each split, compute metrics per lead day; stack all lead days into one
     # aggregate CSV (with lead_day column) and also save per-lead-day CSVs.
-    lead_days = sorted(full_raw['lead_day'].unique())
+    lead_days = [int(d) for d in sorted(full_raw['lead_day'].unique())]
 
     splits_info = [
         ("train", train_df),
