@@ -26,7 +26,7 @@ WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
 LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_area_0.1_sample_20.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
-CONFIG="configs/wsend/exp08_mekong_wsend_era5_ifshres_gritv06_202312_202602_regionalcv.yaml"
+CONFIG="configs/wsend/exp09_mekong_wsend_era5_ifshres_gritv06_202312_202602_regionalcv.yaml"
 RUN_NAME="$(basename "$CONFIG" .yaml)"
 SEED=42
 
