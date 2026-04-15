@@ -19,16 +19,17 @@ class InputEncoder(nn.Module):
     """
     Encodes dynamic node features to embed_dim using separate MLPs for SWOT and climate features.
 
-    Expected feature order (matches DYNAMIC_FEATURE_VARS in feature_assembler.py):
-        SWOT    [0 : swot_dim]:    obs_mask, latest_wse, days_since_last_obs, time_doy_sin, time_doy_cos
-        Climate [swot_dim :]:      LWd, P, Pres, RelHum, SWd, Temp, Wind
+    Expected feature order (matches WSE_INPUT_VARS + ERA5_CLIMATE_VARS in temporal_graph_dataset_lake.py):
+        SWOT    [0 : swot_dim]:    obs_mask, latest_wse, latest_wse_u, latest_wse_std,
+                                   latest_area_total, days_since_last_obs, time_doy_sin, time_doy_cos
+        Climate [swot_dim :]:      LWd, SWd, P, Pres, Temp, Td, Wind, sf, sd, swvl1, swvl2, swvl3, swvl4
     Each group is projected to embed_dim // 2 then concatenated → embed_dim.
     """
 
     def __init__(
         self,
-        swot_dim: int = 5,
-        climate_dim: int = 7,
+        swot_dim: int = 8,
+        climate_dim: int = 13,
         embed_dim: int = 64,
     ):
         super().__init__()
@@ -86,14 +87,20 @@ class StaticEncoder(nn.Module):
 
 class ForecastHead(nn.Module):
     """
-    Maps the hidden representation at the last time step to WSE forecast(s) per node.
+    Maps the per-lead-day hidden states to WSE forecast(s) per node.
+
+    For multi-step forecasting, the last forecast_horizon timesteps of h correspond
+    to the ECMWF forecast steps, each already encoded with lead-day-specific climate.
+    The MLP is applied independently to each of those hidden states (output size 1),
+    so lead day d gets its own dedicated representation rather than sharing a single
+    bottleneck.
 
     Two fully-connected layers with a bottleneck:
-        hidden_dim  →  hidden_dim // 2  →  forecast_horizon
+        hidden_dim  →  hidden_dim // 2  →  1   (applied per lead-day timestep)
 
-    When forecast_horizon=1 (default), output is squeezed to (num_nodes,) for
-    backward compatibility with 1-day-ahead training code.
-    When forecast_horizon>1 (e.g. 10 for lake multi-step), output is (num_nodes, horizon).
+    When forecast_horizon=1, output is squeezed to (num_nodes,) for backward
+    compatibility with 1-day-ahead training code.
+    When forecast_horizon>1, output is (num_nodes, horizon).
     """
 
     def __init__(self, hidden_dim: int, dropout: float = 0.1, forecast_horizon: int = 1):
@@ -105,7 +112,7 @@ class ForecastHead(nn.Module):
             nn.Linear(hidden_dim, bottleneck),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(bottleneck, forecast_horizon),
+            nn.Linear(bottleneck, 1),
         )
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
@@ -113,14 +120,16 @@ class ForecastHead(nn.Module):
         Args:
             h: (num_nodes, seq_len + forecast_horizon, hidden_dim) — full STBlock output
         Returns:
-            forecast_horizon == 1: (num_nodes,)              — backward compatible
-            forecast_horizon >  1: (num_nodes, horizon)      — multi-step direct
+            forecast_horizon == 1: (num_nodes,)         — backward compatible
+            forecast_horizon >  1: (num_nodes, horizon) — multi-step direct
         """
-        h_last = h[:, -1, :]           # (num_nodes, hidden_dim)
-        out = self.net(h_last)         # (num_nodes, forecast_horizon)
+        h_fc = h[:, -self.forecast_horizon:, :]   # (num_nodes, forecast_horizon, hidden_dim)
+        out = self.net(h_fc).squeeze(-1)           # (num_nodes, forecast_horizon)
+        # self.net(h_fc) -> (N, 5, 1) - MLP applied independently to each of the 5 timesteps
+        # .squeeze(-1) -> (N, 5) - drop the trailing size-1 dim
         if self.forecast_horizon == 1:
-            return out.squeeze(-1)     # (num_nodes,) — backward compatible
-        return out                     # (num_nodes, horizon)
+            return out.squeeze(-1)                 # (num_nodes,) — backward compatible
+        return out                                 # (num_nodes, horizon)
 
 
 class SWOTGNN(nn.Module):
@@ -133,8 +142,8 @@ class SWOTGNN(nn.Module):
 
     def __init__(
         self,
-        swot_dim: int = 5,
-        climate_dim: int = 7,
+        swot_dim: int = 8,
+        climate_dim: int = 13,
         embed_dim: int = 64,
         hidden_dim: int = 32,
         st_blocks: int = 2,
@@ -186,9 +195,9 @@ class SWOTGNN(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            x: (num_nodes, seq_len + 1, swot_dim + climate_dim)
-               History window (seq_len steps) + 1 forecast step.
-               WSE features are zeroed on the forecast step to prevent leakage.
+            x: (num_nodes, seq_len + forecast_horizon, swot_dim + climate_dim)
+               History window (seq_len steps) + forecast_horizon forecast steps.
+               SWOT features (indices 0–swot_dim-1) are zeroed on forecast steps to prevent leakage.
             edge_index: (2, num_edges)
             static_features: (num_nodes, static_dim) - time-invariant attributes
             batch: Optional PyG batch vector for multi-graph batching

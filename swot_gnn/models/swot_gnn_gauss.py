@@ -50,7 +50,7 @@ class SWOTGNNGauss(SWOTGNN):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            x: (num_nodes, seq_len + 1, swot_dim + climate_dim)
+            x: (num_nodes, seq_len + forecast_horizon, swot_dim + climate_dim)
             edge_index: (2, num_edges)
             static_features: (num_nodes, static_dim)
             batch: Optional PyG batch vector for multi-graph batching
