@@ -4,7 +4,10 @@ Per Osanlou et al. NeurIPS 2024 / Rampasek et al. NeurIPS 2022.
 
 Combines:
 - Local: GAT aggregates info from graph neighbors (upstream/downstream reaches)
-- Global: Attention lets each node attend to all others (captures long-range dependencies)
+- Global: Multi-head attention lets each node attend to all others (captures long-range
+  dependencies). Each head operates in a subspace of dimension out_dim // heads,
+  allowing different heads to specialize in different relational patterns
+  (e.g. basin proximity, WSE similarity, climate zone).
 """
 import torch
 import torch.nn as nn
@@ -36,9 +39,11 @@ class GraphGPSLayer(nn.Module):
         super().__init__()
         if not HAS_PYG:
             raise ImportError("PyTorch Geometric required for GraphGPSLayer")
+        assert out_dim % heads == 0, f"out_dim ({out_dim}) must be divisible by heads ({heads})"
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.heads = heads
+        self.head_dim = out_dim // heads
         self.dropout = dropout
         self.use_linear_attn = use_linear_attn
 
@@ -62,58 +67,78 @@ class GraphGPSLayer(nn.Module):
 
     def _global_attention(self, x: torch.Tensor, batch: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Global attention over all nodes. Three modes:
-        - Batched (batch vector provided): B independent attention operations, one per sample.
-          Prevents nodes from one sample attending to nodes from another sample.
-        - Large n (>256), unbatched: FAVOR+ linear attention for O(n) complexity (avoids n² softmax)
-        - Small n, unbatched: Standard softmax attention
+        Multi-head global attention over all nodes.
+
+        Q, K, V are projected to out_dim then split into `heads` subspaces of size
+        head_dim = out_dim // heads. Attention is computed independently per head,
+        outputs are concatenated, and a final linear projection mixes them back to out_dim.
+
+        Three execution modes (same as before, now applied per head):
+        - Batched (batch vector provided): each sample attends only within itself.
+        - Large n (>256), unbatched: FAVOR+ linear attention, O(n) per head.
+        - Small n, unbatched: standard softmax attention.
         """
         n = x.size(0)
-        q = self.proj_q(x)
-        k = self.proj_k(x)
-        v = self.proj_v(x)
+        H, d_h = self.heads, self.head_dim
+
+        # Project then split into heads: (N, out_dim) -> (N, H, d_h)
+        q = self.proj_q(x).view(n, H, d_h)
+        k = self.proj_k(x).view(n, H, d_h)
+        v = self.proj_v(x).view(n, H, d_h)
+
         if batch is not None:
-            # Batch-aware path: reshape to (B, N, d) so each sample attends only within itself.
-            # Nodes from different samples never interact in either FAVOR+ or softmax path.
+            # Batch-aware path: each sample attends only within itself.
+            # Reshape to (B, N, H, d_h) so nodes from different samples never interact.
             B = int(batch.max().item()) + 1
             N = n // B
-            q = q.view(B, N, self.out_dim)
-            k = k.view(B, N, self.out_dim)
-            v = v.view(B, N, self.out_dim)
+            q = q.view(B, N, H, d_h)
+            k = k.view(B, N, H, d_h)
+            v = v.view(B, N, H, d_h)
             if self.use_linear_attn and N > 256:
-                # FAVOR+ per sample: each graph gets its own independent (d, d) kv matrix
-                scale = self.out_dim ** -0.25
+                # FAVOR+ per head per sample
+                # kv: (B, H, d_h, d_h)  norm: (B, N, H)  out: (B, N, H, d_h)
+                scale = d_h ** -0.25
                 q = (F.elu(q) + 1) * scale
                 k = (F.elu(k) + 1) * scale
-                kv   = torch.einsum("bnd,bnv->bdv", k, v)                        # (B, d, d)
-                norm = torch.einsum("bnd,bd->bn", q, k.sum(dim=1)) + 1e-8        # (B, N)
-                out  = torch.einsum("bnd,bdv->bnv", q, kv) / norm.unsqueeze(-1)  # (B, N, d)
+                kv   = torch.einsum("bnhd,bnhv->bhdv", k, v)
+                norm = torch.einsum("bnhd,bhd->bnh",   q, k.sum(dim=1)) + 1e-8
+                out  = torch.einsum("bnhd,bhdv->bnhv", q, kv) / norm.unsqueeze(-1)
             else:
-                # Batched softmax: B independent (N, N) attention matrices via bmm
-                scale = self.out_dim ** -0.5
-                attn = torch.bmm(q, k.transpose(1, 2)) * scale                   # (B, N, N)
+                # Batched softmax multi-head: (B, H, N, N) attention matrices
+                # Permute to (B, H, N, d_h) for batched matmul
+                scale = d_h ** -0.5
+                q = q.permute(0, 2, 1, 3)                                           # (B, H, N, d_h)
+                k = k.permute(0, 2, 1, 3)
+                v = v.permute(0, 2, 1, 3)
+                attn = torch.matmul(q, k.transpose(-2, -1)) * scale                 # (B, H, N, N)
                 attn = F.softmax(attn, dim=-1)
                 attn = F.dropout(attn, p=self.dropout, training=self.training)
-                out  = torch.bmm(attn, v)                                         # (B, N, d)
+                out  = torch.matmul(attn, v).permute(0, 2, 1, 3)                   # (B, N, H, d_h)
             out = out.reshape(n, self.out_dim)
+
         elif self.use_linear_attn and n > 256:
-            # FAVOR+ style: kernel feature map phi(x)=elu(x)+1 makes attention linearizable
-            # out_i = sum_j phi(q_i)^T phi(k_j) v_j / sum_j phi(q_i)^T phi(k_j)
-            # Implemented via: q @ (k^T @ v) / (q @ sum(k))
-            scale = (self.out_dim) ** -0.25
-            q = F.elu(q) + 1
-            k = F.elu(k) + 1
-            q = q * scale
-            k = k * scale
-            kv = torch.einsum("nd,nv->dv", k, v)  # (out_dim, out_dim)
-            out = torch.einsum("nd,dv->nv", q, kv) / (torch.einsum("nd,d->n", q, k.sum(0)) + 1e-8).unsqueeze(-1)
+            # FAVOR+ multi-head unbatched
+            # kv: (H, d_h, d_h)  norm: (N, H)  out: (N, H, d_h)
+            scale = d_h ** -0.25
+            q = (F.elu(q) + 1) * scale
+            k = (F.elu(k) + 1) * scale
+            kv   = torch.einsum("nhd,nhv->hdv", k, v)
+            norm = torch.einsum("nhd,hd->nh",   q, k.sum(dim=0)) + 1e-8
+            out  = torch.einsum("nhd,hdv->nhv", q, kv) / norm.unsqueeze(-1)
+            out  = out.reshape(n, self.out_dim)
+
         else:
-            # Standard attention: softmax(QK^T / sqrt(d)) @ V
-            scale = (self.out_dim) ** -0.5
-            attn = torch.mm(q, k.t()) * scale
+            # Standard softmax multi-head unbatched
+            # Permute to (H, N, d_h) for batched matmul across heads
+            scale = d_h ** -0.5
+            q = q.permute(1, 0, 2)                                                  # (H, N, d_h)
+            k = k.permute(1, 0, 2)
+            v = v.permute(1, 0, 2)
+            attn = torch.matmul(q, k.transpose(-2, -1)) * scale                     # (H, N, N)
             attn = F.softmax(attn, dim=-1)
             attn = F.dropout(attn, p=self.dropout, training=self.training)
-            out = torch.mm(attn, v)
+            out  = torch.matmul(attn, v).permute(1, 0, 2).reshape(n, self.out_dim)  # (N, out_dim)
+
         return self.proj_out(out)
 
     def forward(

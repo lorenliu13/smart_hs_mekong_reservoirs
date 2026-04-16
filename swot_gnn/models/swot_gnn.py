@@ -2,11 +2,14 @@
 SWOT-GNN: Temporal Graph Neural Network for river discharge simulation.
 Replication of Osanlou et al. NeurIPS 2024.
 
-Architecture: InputEncoder -> STBlock x2 -> ForecastHead
-- InputEncoder:   project raw features to embed_dim
-- STBlock:        temporal (LSTM) + spatial (GraphGPS) processing
-- ForecastHead:   map the final time-step hidden state to a single scalar
-                  (1-day-ahead WSE) per node
+Architecture: InputEncoder -> StepTypeEmbedding -> STBlock x2 -> ForecastHead
+- InputEncoder:       project raw features to embed_dim
+- StepTypeEmbedding:  learned 2-class embedding (0=historical, 1=forecast) added to
+                      encoded features before the STBlocks, giving the LSTM an explicit
+                      signal about when the observation regime switches
+- STBlock:            temporal (LSTM) + spatial (GraphGPS) processing
+- ForecastHead:       map the final time-step hidden state to a single scalar
+                      (1-day-ahead WSE) per node
 """
 import torch
 import torch.nn as nn
@@ -167,6 +170,11 @@ class SWOTGNN(nn.Module):
             embed_dim=static_embed_dim,
         )
         self.static_embed_dim = static_embed_dim
+        self.forecast_horizon = forecast_horizon
+        # Learned step-type embedding: 0 = historical step, 1 = forecast step.
+        # Added to the encoded features before the first STBlock so the LSTM
+        # receives an explicit signal about the observation regime switch.
+        self.step_type_embed = nn.Embedding(2, embed_dim)
         # Stack of ST-blocks: first takes embed_dim, rest take hidden_dim
         self.st_blocks = nn.ModuleList()
         for i in range(st_blocks):
@@ -185,6 +193,38 @@ class SWOTGNN(nn.Module):
         self.forecast_head = ForecastHead(
             hidden_dim=hidden_dim, dropout=dropout, forecast_horizon=forecast_horizon
         )
+
+    def _encode(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        static_features: Optional[torch.Tensor] = None,
+        batch: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Shared backbone: InputEncoder → step-type embedding → ST-blocks.
+        Returns (num_nodes, seq_len + forecast_horizon, hidden_dim).
+        Used by forward() and subclasses (e.g. SWOTGNNGauss).
+        """
+        # 1. Encode raw features to embed_dim for every node and time step
+        h = self.encoder(x)                                          # (N, T, embed_dim)
+
+        # 2. Add step-type embedding: 0=historical for the first T-horizon steps,
+        #    1=forecast for the last forecast_horizon steps.
+        #    This gives the LSTM an explicit signal about the observation regime switch.
+        T = h.size(1)
+        step_types = torch.zeros(T, dtype=torch.long, device=h.device)
+        step_types[-self.forecast_horizon:] = 1                      # (T,)
+        h = h + self.step_type_embed(step_types).unsqueeze(0)        # (N, T, embed_dim)
+
+        # 3. Encode static attributes once; injected into each STBlock
+        static_emb = self.static_encoder(static_features) if static_features is not None else None
+
+        # 4. Pass through the stack of ST-blocks (LSTM + GraphGPS)
+        for st in self.st_blocks:
+            h = st(h, edge_index, batch=batch, static=static_emb)   # (N, T, hidden_dim)
+
+        return h
 
     def forward(
         self,
@@ -205,15 +245,5 @@ class SWOTGNN(nn.Module):
             forecast_horizon=1: (num_nodes,)        — 1-day-ahead WSE (backward compatible)
             forecast_horizon>1: (num_nodes, horizon) — multi-step direct WSE forecast
         """
-        # 1. Encode raw features to embed_dim for every node and time step
-        h = self.encoder(x)                                          # (N, T, embed_dim)
-
-        # 2. Encode static attributes once; injected into each STBlock
-        static_emb = self.static_encoder(static_features) if static_features is not None else None
-
-        # 3. Pass through the stack of ST-blocks (LSTM + GraphGPS)
-        for st in self.st_blocks:
-            h = st(h, edge_index, batch=batch, static=static_emb)   # (N, T, hidden_dim)
-
-        # 4. Project the final time step to a single WSE scalar per node
-        return self.forecast_head(h)                                 # (N,)
+        h = self._encode(x, edge_index, static_features=static_features, batch=batch)
+        return self.forecast_head(h)                                 # (N,) or (N, H)
