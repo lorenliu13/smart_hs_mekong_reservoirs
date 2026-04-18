@@ -40,7 +40,7 @@ from shapely.ops import unary_union
 # Parameters
 # ---------------------------------------------------------------------------
 AREA_THRESHOLD_SQKM = 0.1  # Must match the lake graph that was produced
-OBS_COUNT_THRESHOLD = 20   # Must match the lake graph that was produced
+OBS_COUNT_THRESHOLD = 30   # Must match the lake graph that was produced
 
 # ---------------------------------------------------------------------------
 # Paths

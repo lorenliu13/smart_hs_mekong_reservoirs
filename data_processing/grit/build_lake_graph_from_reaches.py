@@ -63,7 +63,7 @@ from pathlib import Path
 # LAKE_AREA_THRESHOLD_SQKM = 0   # Only analyse lakes with poly_area > this value (sq km)
 TERMINAL_NODE_ID = -1            # Assigned to lakes with no downstream lake (basin outlets).
 AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
-OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lake
+OBS_COUNT_THRESHOLD = 30  # Minimum number of daily observations to retain a lake
 # When True, reaches shared by multiple lakes are assigned exclusively to the
 # most-downstream lake (determined by BFS downstream from the contested reach).
 DEDUPLICATE_SHARED_REACHES = True

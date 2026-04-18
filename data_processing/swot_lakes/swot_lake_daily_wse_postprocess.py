@@ -26,13 +26,13 @@ import pandas as pd
 from pathlib import Path
 
 TIME_RANGE = '2023_12_2026_02'
-AREA_THRESHOLD_SQKM = 0  # Minimum lake area in square kilometers to retain
-OBS_COUNT_THRESHOLD = 10   # Minimum number of daily observations to retain a lake
+AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
+OBS_COUNT_THRESHOLD = 30   # Minimum number of daily observations to retain a lake
 
 # ── Paths ───────────────────────────────────────────────────────────────────────
 OUTLIER_CSV = Path(
     r"E:\Project_2025_2026\Smart_hs\processed_data\swot\great_mekong_river_basin\lakes"
-) / f"swot_lake_{TIME_RANGE}_qc_all_lakes_xtrk10_60km_dark50pct_qf01_outlier_flag.csv"
+) / f"swot_lake_{TIME_RANGE}_outlier_flag.csv"
 PLD_PATH = (
     r"E:\Project_2025_2026\Smart_hs\raw_data\grit\GRIT_mekong_mega_reservoirs\prior_lake_database"
     r"\swot_prior_lake_database_great_mekong_overlap_with_grit.csv"

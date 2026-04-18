@@ -17,11 +17,11 @@ model:
   dropout: 0.1
   static_dim: 0          # placeholder — auto-detected from the static datacube at runtime
   static_embed_dim: 16
-  forecast_horizon: 5    # must match training.forecast_horizon
+  forecast_horizon: 10    # must match training.forecast_horizon
 
 training:
   seq_len: 30
-  forecast_horizon: 5
+  forecast_horizon: 10
   batch_size: 16
   lr: 0.001
   num_epochs: 100

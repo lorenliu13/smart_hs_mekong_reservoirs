@@ -31,7 +31,7 @@ from shapely.geometry import LineString, Point
 # Parameters
 # ---------------------------------------------------------------------------
 AREA_THRESHOLD_SQKM = 0.1  # Must match the value used in build_lake_graph_from_reaches.py
-OBS_COUNT_THRESHOLD = 20   # Must match the value used in build_lake_graph_from_reaches.py
+OBS_COUNT_THRESHOLD = 30   # Must match the value used in build_lake_graph_from_reaches.py
 # Terminal node IDs are all negative integers (-1, -2, …); real lake IDs are positive.
 
 # ---------------------------------------------------------------------------
