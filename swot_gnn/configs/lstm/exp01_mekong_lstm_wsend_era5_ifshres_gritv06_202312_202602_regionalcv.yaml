@@ -12,7 +12,7 @@ model:
   swot_dim: 8
   climate_dim: 13
   embed_dim: 64
-  hidden_dim: 32
+  hidden_dim: 64
   st_blocks: 1
   dropout: 0.1
   static_dim: 0          # placeholder — auto-detected from the static datacube at runtime
