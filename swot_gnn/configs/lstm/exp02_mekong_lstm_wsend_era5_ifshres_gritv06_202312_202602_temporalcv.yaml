@@ -1,0 +1,32 @@
+# Config for the LSTM-only multi-day WSE forecasting baseline — temporal CV.
+#
+# Architecture: InputEncoder → LSTMBlock × st_blocks → ForecastHead
+# No GraphGPS layers; each lake is processed independently (no graph).
+#
+# Use with:
+#   wsend_lstm_training/run_training_lake_lstm_wsend_temporal_cv.py
+#   wsend_lstm_training/run_inference_lstm_wsend_temporal_cv.py
+
+model:
+  model_type: LSTMBaselineMultiStepGaussCRPS
+  swot_dim: 8
+  climate_dim: 13
+  embed_dim: 64
+  hidden_dim: 64
+  st_blocks: 1
+  dropout: 0.1
+  static_dim: 0          # placeholder — auto-detected from the static datacube at runtime
+  static_embed_dim: 16
+  forecast_horizon: 10    # must match training.forecast_horizon
+
+training:
+  seq_len: 30
+  forecast_horizon: 10
+  batch_size: 16
+  lr: 0.001
+  num_epochs: 100
+  patience: 20
+  grad_clip: 1.0
+  val_frac: 0.15
+
+seed: 42
