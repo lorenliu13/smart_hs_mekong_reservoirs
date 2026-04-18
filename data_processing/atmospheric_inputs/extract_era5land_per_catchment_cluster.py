@@ -55,7 +55,7 @@ from shapely.geometry import box
 warnings.filterwarnings("ignore")
 
 AREA_THRESHOLD_SQKM = 0.1  # Minimum lake area in square kilometers to retain
-OBS_COUNT_THRESHOLD = 20  # Minimum number of daily observations to retain a lake
+OBS_COUNT_THRESHOLD = 30  # Minimum number of daily observations to retain a lake
 
 # ---------------------------------------------------------------------------
 # Configuration — HPC cluster paths
