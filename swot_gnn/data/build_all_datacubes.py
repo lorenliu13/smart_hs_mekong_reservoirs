@@ -82,9 +82,9 @@ STATIC_EXCLUDE_COLS = [
 ]
 
 # ── Which datacubes to build (set to False to skip) ──────────────────────────
-BUILD_WSE    = False
-BUILD_ERA5   = False
-BUILD_ECMWF  = False
+BUILD_WSE    = True
+BUILD_ERA5   = True
+BUILD_ECMWF  = True
 BUILD_STATIC = True
 
 # ─────────────────────────────────────────────────────────────────────────────
