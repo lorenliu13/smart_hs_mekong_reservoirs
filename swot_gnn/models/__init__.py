@@ -6,6 +6,8 @@ from .swot_gnn_gauss import SWOTGNNGauss
 from .graph_gps_layer import GraphGPSLayer
 # Baselines for comparison
 from .baselines import GPSGNN, LSTMBaseline, drainage_area_ratio
+# Multi-day LSTM-only baseline (deterministic and probabilistic)
+from .lstm_baseline_nd import LSTMBaselineMultiStep, LSTMBaselineMultiStepGauss
 # Model registry: maps model_type string to ModelSpec (class, loss, slug)
 from .registry import MODEL_REGISTRY, ModelSpec
 
@@ -13,5 +15,6 @@ __all__ = [
     "SWOTGNN", "SWOTGNNGauss",
     "GraphGPSLayer",
     "GPSGNN", "LSTMBaseline", "drainage_area_ratio",
+    "LSTMBaselineMultiStep", "LSTMBaselineMultiStepGauss",
     "MODEL_REGISTRY", "ModelSpec",
 ]

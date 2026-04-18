@@ -8,8 +8,10 @@ processed independently; no message passing between neighbours.
 Use this model as a benchmark to isolate the contribution of graph
 connectivity in the full SWOT-GNN model.
 
-Class exported:
-    LSTMBaselineMultiStep
+Classes exported:
+    LSTMBaselineMultiStep         — deterministic point forecast
+    LSTMBaselineMultiStepGauss    — probabilistic Gaussian forecast (mean + log_std),
+                                    trained with CRPS over multiple lead days
 """
 import torch
 import torch.nn as nn
@@ -132,6 +134,28 @@ class LSTMBaselineMultiStep(nn.Module):
             hidden_dim=hidden_dim, dropout=dropout, forecast_horizon=forecast_horizon
         )
 
+    def _encode(
+        self,
+        x: torch.Tensor,
+        static_features: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Shared encoder: InputEncoder → step-type embedding → LSTMBlocks.
+
+        Factored out so subclasses can call it without duplicating logic.
+
+        Returns:
+            h: (num_nodes, seq_len + forecast_horizon, hidden_dim)
+        """
+        h = self.encoder(x)
+        T = h.size(1)
+        step_types = torch.zeros(T, dtype=torch.long, device=h.device)
+        step_types[-self.forecast_horizon:] = 1
+        h = h + self.step_type_embed(step_types).unsqueeze(0)
+        static_emb = self.static_encoder(static_features) if static_features is not None else None
+        for block in self.lstm_blocks:
+            h = block(h, static=static_emb)
+        return h
+
     def forward(
         self,
         x: torch.Tensor,
@@ -147,16 +171,47 @@ class LSTMBaselineMultiStep(nn.Module):
             forecast_horizon == 1: (num_nodes,)
             forecast_horizon >  1: (num_nodes, forecast_horizon)
         """
-        h = self.encoder(x)                                                      # (N, T, embed_dim)
-
-        # Add step-type embedding: 0=historical for the first T-horizon steps,
-        # 1=forecast for the last forecast_horizon steps.
-        T = h.size(1)
-        step_types = torch.zeros(T, dtype=torch.long, device=h.device)
-        step_types[-self.forecast_horizon:] = 1                                  # (T,)
-        h = h + self.step_type_embed(step_types).unsqueeze(0)                   # (N, T, embed_dim)
-
-        static_emb = self.static_encoder(static_features) if static_features is not None else None
-        for block in self.lstm_blocks:
-            h = block(h, static=static_emb)                                      # (N, T, hidden_dim)
+        h = self._encode(x, static_features)                                     # (N, T, hidden_dim)
         return self.forecast_head(h)                                             # (N,) or (N, H)
+
+
+class LSTMBaselineMultiStepGauss(LSTMBaselineMultiStep):
+    """
+    Probabilistic LSTM-only baseline: same backbone as LSTMBaselineMultiStep,
+    dual Gaussian output heads trained with multi-step CRPS.
+
+    Architecture:
+        InputEncoder → [LSTMBlock × st_blocks] → mean_head
+                                                → log_std_head
+
+    forward() returns (mean, log_std), each (num_nodes, forecast_horizon),
+    matching the interface expected by ObservedGaussianCRPSLossMultiStep and
+    the existing train_lstm_nd._run_epoch_lstm_nd infrastructure (tuple branch).
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        hidden_dim       = kwargs.get("hidden_dim", 32)
+        dropout          = kwargs.get("dropout", 0.5)
+        forecast_horizon = kwargs.get("forecast_horizon", 1)
+
+        del self.forecast_head
+        self.mean_head    = ForecastHead(hidden_dim, dropout, forecast_horizon)
+        self.log_std_head = ForecastHead(hidden_dim, dropout, forecast_horizon)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        static_features: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            x:               (num_nodes, seq_len + forecast_horizon, swot_dim + climate_dim)
+            static_features: (num_nodes, static_dim)
+        Returns:
+            mean:    (num_nodes, forecast_horizon) — predicted mean WSE (normalised)
+            log_std: (num_nodes, forecast_horizon) — predicted log standard deviation
+        """
+        h = self._encode(x, static_features)                                     # (N, T, hidden_dim)
+        return self.mean_head(h), self.log_std_head(h)

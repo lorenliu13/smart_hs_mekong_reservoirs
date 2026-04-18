@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=run_lake_regionalcv_wsend
-#SBATCH --output=run_lake_regionalcv_wsend.out
-#SBATCH --error=run_lake_regionalcv_wsend.err
+#SBATCH --job-name=run_lake_regionalcv_lstm_wsend
+#SBATCH --output=run_lake_regionalcv_lstm_wsend.out
+#SBATCH --error=run_lake_regionalcv_lstm_wsend.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -26,7 +26,7 @@ WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
 LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_area_0.1_sample_30.csv"
 
 SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
-CONFIG="configs/wsend/exp09_mekong_wsend_era5_ifshres_gritv06_202312_202602_regionalcv.yaml"
+CONFIG="configs/lstm/exp01_mekong_lstm_wsend_era5_ifshres_gritv06_202312_202602_regionalcv.yaml"
 RUN_NAME="$(basename "$CONFIG" .yaml)"
 SEED=42
 
@@ -52,7 +52,7 @@ for FOLD_IDX in $(seq 0 $((N_FOLDS - 1))); do
     echo "============================================================"
 
     # ── Training ───────────────────────────────────────────────────────────────
-    python wsend_training/run_training_lake_wsend_regional_cv.py \
+    python wsend_lstm_training/run_training_lake_lstm_wsend_regional_cv.py \
         --config           "$CONFIG" \
         --wse-datacube     "$WSE_DATACUBE" \
         --era5-datacube    "$ERA5_DATACUBE" \
@@ -70,7 +70,7 @@ for FOLD_IDX in $(seq 0 $((N_FOLDS - 1))); do
         --device cuda
 
     # ── Inference (runs only if training succeeded) ────────────────────────────
-    python wsend_training/run_inference_wsend_regional_cv.py \
+    python wsend_lstm_training/run_inference_lstm_wsend_regional_cv.py \
         --config           "$CONFIG" \
         --wse-datacube     "$WSE_DATACUBE" \
         --era5-datacube    "$ERA5_DATACUBE" \

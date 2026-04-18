@@ -69,10 +69,11 @@ STEPS = (
 
 # ENS real-time has 50 perturbed members (members 1–50)
 PF_NUMBERS = "/".join(str(n) for n in range(1, 51))  # "1/2/.../50"
+# PF_NUMBERS = "1"
 
-START_YEAR  = 2024
+START_YEAR  = 2023
 START_MONTH = 1
-END_YEAR    = 2024
+END_YEAR    = 2023
 END_MONTH   = 1
 
 OUTDIR = Path("./file_size_check_ens_enfo")

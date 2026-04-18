@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.swot_gnn import SWOTGNN
 from models.swot_gnn_gauss import SWOTGNNGauss
-from models.lstm_baseline_nd import LSTMBaselineMultiStep
+from models.lstm_baseline_nd import LSTMBaselineMultiStep, LSTMBaselineMultiStepGauss
 from training.train import (
     ObservedMSELoss,
     ObservedMSELossMultiStep,
@@ -83,5 +83,11 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         loss_cls=ObservedMSELossMultiStep,
         output_mode="point",
         slug="lstm_nd",
+    ),
+    "LSTMBaselineMultiStepGaussCRPS": ModelSpec(
+        model_cls=LSTMBaselineMultiStepGauss,
+        loss_cls=ObservedGaussianCRPSLossMultiStep,
+        output_mode="gaussian",
+        slug="lstm_nd_gauss_crps",
     ),
 }
