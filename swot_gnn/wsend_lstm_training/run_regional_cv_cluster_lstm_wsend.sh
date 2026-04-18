@@ -16,16 +16,18 @@ module load Anaconda3
 conda activate $DATA/py311_torch
 
 # ── Shared paths ───────────────────────────────────────────────────────────────
-TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc_area0.1_obs30"
+AREA_THRESHOLD=0.1
+SAMPLE_THRESHOLD=30
+TRAINING_FOLDER="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/training_data/mekong_lakes_swotpld_era5_ifshres10d_gritv06_202312_202602_qc_area${AREA_THRESHOLD}_obs${SAMPLE_THRESHOLD}"
 
 WSE_DATACUBE="$TRAINING_FOLDER/swot_lake_wse_datacube_wse_norm.nc"
 ERA5_DATACUBE="$TRAINING_FOLDER/swot_lake_era5_climate_datacube.nc"
 ECMWF_DATACUBE="$TRAINING_FOLDER/swot_lake_ecmwf_forecast_datacube.nc"
 STATIC_DATACUBE="$TRAINING_FOLDER/swot_lake_static_datacube.nc"
 WSE_STATS_CSV="$TRAINING_FOLDER/lake_wse_norm_stats.csv"
-LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_area_0.1_sample_30.csv"
+LAKE_GRAPH="$TRAINING_FOLDER/gritv06_great_mekong_pld_lake_graph_area_${AREA_THRESHOLD}_sample_${SAMPLE_THRESHOLD}.csv"
 
-SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments"
+SAVE_DIR="/data/ouce-grit/cenv1160/smart_hs/processed_data/mekong_river_basin_reservoirs/swot_gnn/experiments/area${AREA_THRESHOLD}_obs${SAMPLE_THRESHOLD}"
 CONFIG="configs/lstm/exp01_mekong_lstm_wsend_era5_ifshres_gritv06_202312_202602_regionalcv.yaml"
 RUN_NAME="$(basename "$CONFIG" .yaml)"
 SEED=42
