@@ -13,7 +13,7 @@ model:
   climate_dim: 13
   embed_dim: 64
   hidden_dim: 32
-  st_blocks: 2
+  st_blocks: 1
   dropout: 0.1
   static_dim: 0          # placeholder — auto-detected from the static datacube at runtime
   static_embed_dim: 16
