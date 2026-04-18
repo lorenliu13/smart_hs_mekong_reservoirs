@@ -74,8 +74,6 @@ STATIC_EXCLUDE_COLS = [
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-
-
 def prepare_static_attrs(
     lake_upstream_segs_csv: Path,
     reaches_with_lakes_csv: Path,
