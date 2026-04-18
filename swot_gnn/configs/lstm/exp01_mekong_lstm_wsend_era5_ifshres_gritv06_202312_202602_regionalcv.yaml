@@ -8,7 +8,7 @@
 #   wsend_lstm_training/run_inference_lstm_wsend_regional_cv.py
 
 model:
-  model_type: LSTMBaselineMultiStepGauss 
+  model_type: LSTMBaselineMultiStepGaussCRPS
   swot_dim: 8
   climate_dim: 13
   embed_dim: 64
