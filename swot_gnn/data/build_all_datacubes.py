@@ -66,12 +66,12 @@ REACH_ATTRS_CSV = Path(
     "/GRITv06_reach_predictors_shared_MEKO_YANG.csv"
 )
 LAKE_UPSTREAM_SEGS_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs"
-    "/gritv06_great_mekong_pld_lake_upstream_segments_0sqkm.csv"
+    f"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reservoirs/lake_graph_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}"
+    f"/gritv06_great_mekong_pld_lake_upstream_segments_area_{AREA_THRESHOLD_SQKM}_sample_{OBS_COUNT_THRESHOLD}.csv"
 )
 REACHES_WITH_LAKES_CSV = Path(
-    "/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches"
-    "/gritv06_reaches_great_mekong_with_lake_id.csv"
+    f"/data/ouce-grit/cenv1160/smart_hs/raw_data/grit/mekong_river_basin/reaches"
+    f"/gritv06_reaches_great_mekong_with_lake_id.csv"
 )
 STATIC_EXCLUDE_COLS = [
     "domain",
@@ -82,9 +82,9 @@ STATIC_EXCLUDE_COLS = [
 ]
 
 # ── Which datacubes to build (set to False to skip) ──────────────────────────
-BUILD_WSE    = True
-BUILD_ERA5   = True
-BUILD_ECMWF  = True
+BUILD_WSE    = False
+BUILD_ERA5   = False
+BUILD_ECMWF  = False
 BUILD_STATIC = True
 
 # ─────────────────────────────────────────────────────────────────────────────

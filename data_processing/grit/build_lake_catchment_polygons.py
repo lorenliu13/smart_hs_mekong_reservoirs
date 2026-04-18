@@ -129,17 +129,20 @@ for lake_id, seg_ids in sorted(lake_to_segs.items()):
     # Collect geometries for this lake's segments
     geoms = []
     missing = []
-    for seg in seg_ids:
-        geom = catchment_by_seg.get(seg)
-        if geom is not None:
+    for seg in seg_ids: # loop over segment fids for this lake
+        geom = catchment_by_seg.get(seg) # look up geometry by segment fid
+        if geom is not None: # if found, add to list
             geoms.append(geom)
-        else:
+        else: # if not found, track missing segment fid
             missing.append(seg)
 
-    if missing:
+    if missing: # if any missing segments, log a warning and count them
         missing_count += len(missing)
+        # print a warning for this lake, but keep going to process the ones we do have
+        print(f"  Note: lake {lake_id} — {len(missing)} segment(s) missing from catchment layer: {missing}")
 
     if not geoms:
+        # If no geometries found for this lake, log a warning and skip to next lake
         print(f"  WARNING: lake {lake_id} — no catchment polygons found, skipping")
         continue
 
