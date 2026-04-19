@@ -407,6 +407,117 @@ class TemporalGraphDatasetLake(Dataset):
         )
 
 
+class SingleLeadDatasetLake(Dataset):
+    """
+    Like TemporalGraphDatasetLake but each sample targets exactly one lead day.
+
+    Index is a list of (ecmwf_j, lead_day) pairs, one per SWOT observation date.
+    Each obs_date with valid SWOT observations contributes at most one sample;
+    init_date = obs_date - lead_day days supplies the ERA5 history and ECMWF forecast.
+
+    label_mask is 1 only at the assigned lead_day; all other forecast days are 0,
+    so loss is computed solely at that lead day.
+    """
+
+    def __init__(
+        self,
+        era5_dynamic: np.ndarray,
+        ecmwf_forecast: np.ndarray,
+        static_features: np.ndarray,
+        edge_index: np.ndarray,
+        era5_dates: pd.DatetimeIndex,
+        ecmwf_init_dates: pd.DatetimeIndex,
+        wse_labels: np.ndarray,
+        obs_mask: np.ndarray,
+        lake_ids: np.ndarray,
+        seq_len: int = 30,
+        forecast_horizon: int = 10,
+        samples: Optional[np.ndarray] = None,  # (N, 2): columns [ecmwf_j, lead_day]
+    ):
+        if not HAS_PYG:
+            raise ImportError("PyTorch Geometric is required: pip install torch-geometric")
+        if samples is None:
+            raise ValueError("samples array of shape (N, 2) with [ecmwf_j, lead_day] is required.")
+
+        self.era5_dynamic     = era5_dynamic
+        self.ecmwf_forecast   = ecmwf_forecast
+        self.static_features  = static_features.astype(np.float32)
+        self.edge_index       = torch.from_numpy(edge_index).long()
+        self.era5_dates       = era5_dates
+        self.ecmwf_init_dates = ecmwf_init_dates
+        self.wse_labels       = wse_labels.astype(np.float32)
+        self.obs_mask         = obs_mask.astype(np.float32)
+        self.lake_ids         = lake_ids
+        self.seq_len          = seq_len
+        self.forecast_horizon = forecast_horizon
+        self.n_lakes          = era5_dynamic.shape[0]
+
+        self.era5_date_to_idx  = {d: i for i, d in enumerate(era5_dates)}
+        self.ecmwf_date_to_idx = {d: j for j, d in enumerate(ecmwf_init_dates)}
+
+        self.valid_samples = samples  # (N, 2)
+
+    def __len__(self) -> int:
+        return len(self.valid_samples)
+
+    def __getitem__(
+        self, idx: int
+    ) -> Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns the same tuple as TemporalGraphDatasetLake but label_mask is 1
+        only at the assigned lead_day; all other forecast positions are 0.
+        """
+        ecmwf_j  = int(self.valid_samples[idx, 0])
+        lead_day = int(self.valid_samples[idx, 1])
+        init_date = self.ecmwf_init_dates[ecmwf_j]
+
+        # ERA5 history window
+        last_hist_day  = init_date - pd.Timedelta(days=1)
+        era5_end_idx   = self.era5_date_to_idx[last_hist_day]
+        era5_start_idx = era5_end_idx - self.seq_len + 1
+        history = self.era5_dynamic[:, era5_start_idx:era5_end_idx + 1, :]
+
+        # ECMWF forecast window
+        ecmwf_slice = self.ecmwf_forecast[:, ecmwf_j, :self.forecast_horizon, :]
+        fc_block = np.zeros(
+            (self.n_lakes, self.forecast_horizon, SWOT_DIM + CLIMATE_DIM), dtype=np.float32
+        )
+        for d in range(self.forecast_horizon):
+            valid_date = init_date + pd.Timedelta(days=d)
+            doy = valid_date.dayofyear
+            fc_block[:, d, 6] = float(np.sin(2 * np.pi * doy / 365.25))
+            fc_block[:, d, 7] = float(np.cos(2 * np.pi * doy / 365.25))
+        fc_block[:, :, SWOT_DIM:] = ecmwf_slice
+
+        seq_features = np.concatenate([history, fc_block], axis=1)
+
+        # Label and mask — only at the assigned lead_day
+        labels     = np.zeros((self.n_lakes, self.forecast_horizon), dtype=np.float32)
+        label_mask = np.zeros((self.n_lakes, self.forecast_horizon), dtype=np.float32)
+        target_date = init_date + pd.Timedelta(days=lead_day)
+        t_idx = self.era5_date_to_idx.get(target_date)
+        if t_idx is not None:
+            labels[:, lead_day]     = np.nan_to_num(self.wse_labels[:, t_idx], nan=0.0)
+            label_mask[:, lead_day] = self.obs_mask[:, t_idx]
+
+        data_list = [
+            Data(
+                x=torch.from_numpy(seq_features[:, t, :]).float(),
+                edge_index=self.edge_index,
+                num_nodes=self.n_lakes,
+            )
+            for t in range(self.seq_len + self.forecast_horizon)
+        ]
+        static = torch.from_numpy(self.static_features)
+
+        return (
+            data_list,
+            static,
+            torch.from_numpy(labels).float(),
+            torch.from_numpy(label_mask).float(),
+        )
+
+
 def collate_temporal_graph_batch_lake(
     batch: List[Tuple[List["Data"], torch.Tensor, torch.Tensor, torch.Tensor]],
 ) -> Tuple[List[List["Data"]], torch.Tensor, torch.Tensor, torch.Tensor]:
