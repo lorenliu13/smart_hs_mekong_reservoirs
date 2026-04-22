@@ -45,7 +45,7 @@ VARIABLES = {
     "swvl4": "42.128",
 }
 
-# AREA   = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
+AREA   = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
 # GRID   = "0.1/0.1"
 STEPS  = (
     "0/6/12/18/24/30/36/42/48/54/60/66/72/78/84/90/96/102/108/114/120"
@@ -78,7 +78,6 @@ def build_mars_list_request(date_str: str, params: str = ALL_PARAMS) -> str:
   levtype = sfc,
   param   = {params},
   area    = {AREA},
-  grid    = {GRID},
   output  = cost
 """
 
@@ -188,7 +187,7 @@ def main() -> None:
 
     server = ECMWFService("mars")
     print("[INFO]  Connected to ECMWF MARS server.")
-    print(f"[INFO]  Region : {AREA}  Grid: {GRID}")
+    print(f"[INFO]  Region : {AREA}")
 
     if args.mode == "date-all":
         examine_date_all(server, args.date, args.outdir)

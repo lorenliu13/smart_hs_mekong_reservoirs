@@ -16,6 +16,7 @@ PARAM  = "228.128"          # GRIB param code: 228.128 = tp (total precipitation
 MEMBER = "pf"               # "cf" for control, or "pf" for perturbed member 1
 NUMBER = "1"                # only used when MEMBER == "pf"
 OUTFILE = Path("test_ens_single.grib2")
+AREA = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
 # ---------------------------------------------------------------------------
 
 server = ECMWFService("mars")
@@ -30,6 +31,7 @@ request = {
     "step"   : "0/6/12/24",
     "levtype": "sfc",
     "param"  : PARAM,
+    "area"    : AREA,
 }
 
 if MEMBER == "pf":
