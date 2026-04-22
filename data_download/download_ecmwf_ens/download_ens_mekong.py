@@ -8,29 +8,28 @@ Steps    : 0-240h (6-hourly) — 41 steps
 Members  : Control forecast (cf, member 0) + perturbed forecasts (pf, configurable range)
 Region   : Mekong River Basin (N=34, W=89, S=7, E=112)
 Grid     : 0.1° × 0.1° (~11 km, finer than ENS native ~18 km — interpolated by MARS)
-Format   : GRIB2 (native MARS format), one file per day per member
+Format   : GRIB2 (native MARS format), one file per day
            Output structure:
              OUTDIR/YYYY-MM/ens_mekong_YYYY-MM-DD_cf_all.grib2
-             OUTDIR/YYYY-MM/ens_mekong_YYYY-MM-DD_pf_1_all.grib2
-             OUTDIR/YYYY-MM/ens_mekong_YYYY-MM-DD_pf_2_all.grib2
-             ...
+             OUTDIR/YYYY-MM/ens_mekong_YYYY-MM-DD_pf_1-50_all.grib2
 
 Efficiency note
 ---------------
 For ENS sfc/fc data all parameters and steps for a given date+time are stored
-on the SAME MARS tape file.  This script issues ONE request per member per day
-with all param codes joined by "/", minimising tape mounts.
+on the SAME MARS tape file.  This script issues ONE request per day for cf and
+ONE request per day for all pf members combined (number="1/2/.../50"), with all
+param codes joined by "/", minimising tape mounts.
 Control (cf) and perturbed (pf) have different MARS type values and must be
 retrieved in separate requests.  See ECMWF MARS efficiency guidelines:
 https://confluence.ecmwf.int/x/a4AJBQ
 
-To open in Python (filter by variable):
+To open in Python (filter by variable and member):
     import xarray as xr
     # Control forecast:
     ds_cf = xr.open_dataset("ens_mekong_2026-01-15_cf_all.grib2", engine="cfgrib",
                              filter_by_keys={"shortName": "tp"})
-    # Perturbed forecast member 1:
-    ds_pf = xr.open_dataset("ens_mekong_2026-01-15_pf_1_all.grib2", engine="cfgrib",
+    # All perturbed members (one file contains all):
+    ds_pf = xr.open_dataset("ens_mekong_2026-01-15_pf_1-50_all.grib2", engine="cfgrib",
                              filter_by_keys={"shortName": "tp"})
 """
 
@@ -78,7 +77,7 @@ STEPS = (
 
 # Default perturbed member range (overridable via --pf-start / --pf-end)
 DEFAULT_PF_START = 1
-DEFAULT_PF_END   = 50
+DEFAULT_PF_END   = 10
 
 # Set to False to skip the control forecast (cf) download
 DEFAULT_DOWNLOAD_CF = True
@@ -132,14 +131,13 @@ def download_day(server: ECMWFService, year: int, month: int, day: int,
 
     Returns True if all requested downloads succeed, False if any fail.
 
-    One request is submitted per member: one for cf and one per pf member.
-    All param codes are joined in each request to minimise tape mounts.
+    Two requests maximum per day: one for cf and one for all pf members combined
+    (number="pf_start/.../pf_end").  All param codes are joined in each request
+    to minimise tape mounts.
 
     Output files (inside OUTDIR/YYYY-MM/):
-      ens_mekong_YYYY-MM-DD_cf_all.grib2         (if download_cf=True)
-      ens_mekong_YYYY-MM-DD_pf_1_all.grib2
-      ens_mekong_YYYY-MM-DD_pf_2_all.grib2
-      ...
+      ens_mekong_YYYY-MM-DD_cf_all.grib2              (if download_cf=True)
+      ens_mekong_YYYY-MM-DD_pf_<start>-<end>_all.grib2
 
     Notes on accumulated fields
     ---------------------------
@@ -190,21 +188,21 @@ def download_day(server: ECMWFService, year: int, month: int, day: int,
                 print(f"[FAIL]  {tag} cf: {e}")
                 success = False
 
-    # --- Perturbed forecasts: one request per member ---
-    for member in pf_member_range(pf_start, pf_end):
-        pf_file = month_dir / f"ens_mekong_{tag}_pf_{member}_all.grib2"
-        if pf_file.exists():
-            print(f"[SKIP]  {pf_file.name} already exists.")
-            continue
-        print(f"[START] {tag}  perturbed forecast (pf, member {member})")
+    # --- Perturbed forecasts: one request for all members combined ---
+    all_members = "/".join(str(m) for m in pf_member_range(pf_start, pf_end))
+    pf_file = month_dir / f"ens_mekong_{tag}_pf_{pf_start}-{pf_end}_all.grib2"
+    if pf_file.exists():
+        print(f"[SKIP]  {pf_file.name} already exists.")
+    else:
+        print(f"[START] {tag}  perturbed forecasts (pf, members {pf_start}–{pf_end})")
         try:
             server.execute(
-                {**base_request, "type": "pf", "number": str(member)},
+                {**base_request, "type": "pf", "number": all_members},
                 str(pf_file),
             )
             print(f"[DONE]  Saved → {pf_file}")
         except Exception as e:
-            print(f"[FAIL]  {tag} pf member {member}: {e}")
+            print(f"[FAIL]  {tag} pf members {pf_start}–{pf_end}: {e}")
             success = False
 
     return success
@@ -240,7 +238,7 @@ def main() -> None:
     print(f"[INFO]  Variables        : {', '.join(VARIABLES.keys())} (1 combined request/member/day)")
     cf_label = "skipped (--no-cf)" if args.no_cf else "yes"
     n_pf = args.pf_end - args.pf_start + 1
-    print(f"[INFO]  Members          : cf (control): {cf_label} + pf members {args.pf_start}–{args.pf_end} ({n_pf} requests/day)")
+    print(f"[INFO]  Members          : cf (control): {cf_label} + pf members {args.pf_start}–{args.pf_end} ({n_pf} members, 1 combined request/day)")
     print(f"[INFO]  Region (N/W/S/E) : {AREA}")
     print(f"[INFO]  Steps            : {STEPS[:40]}...")
     print("-" * 60)
