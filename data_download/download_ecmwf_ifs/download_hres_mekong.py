@@ -7,7 +7,6 @@ Period   : 2023-01-01 to 2025-12-31
 Run      : 00 UTC only
 Steps    : 0-240h (6-hourly) — 41 steps; instantaneous vars averaged to daily, accumulated vars differenced
 Region   : Mekong River Basin (N=34, W=96, S=9, E=109)
-Grid     : 0.1° × 0.1° (~11 km, closest to HRES native 9 km)
 Format   : GRIB2 (native MARS format), one combined file per month (all variables)
            Output structure: OUTDIR/YYYY-MM/hres_mekong_YYYY-MM_all.grib2
 
@@ -56,7 +55,6 @@ VARIABLES = {
 }
 
 AREA   = "34/89/7/112"                    # N/W/S/E — full Mekong River Basin
-GRID   = "0.1/0.1"                        # ~11 km regular lat/lon
 
 # All param codes joined for a single multi-param MARS request (MARS efficiency:
 # param is an inner-loop keyword — all params for a date+time share one tape file)
@@ -146,7 +144,6 @@ def download_month(server: ECMWFService, year: int, month: int, outdir: Path) ->
             "levtype" : "sfc",      # surface fields
             "param"   : ALL_PARAMS, # all variables in one request (MARS efficiency)
             "area"    : AREA,
-            "grid"    : GRID,
         }, str(outfile))
     except Exception as e:
         print(f"[FAIL]  {year}-{month:02d}: {e}")
@@ -173,7 +170,6 @@ def main() -> None:
     print(f"[INFO]  Period           : {args.start_year}-{args.start_month:02d} → {args.end_year}-{args.end_month:02d}")
     print(f"[INFO]  Variables        : {', '.join(VARIABLES.keys())} (1 combined request/month)")
     print(f"[INFO]  Region (N/W/S/E) : {AREA}")
-    print(f"[INFO]  Grid             : {GRID}")
     print(f"[INFO]  Steps            : {STEPS[:40]}...")
     print("-" * 60)
 
