@@ -25,8 +25,8 @@ server.execute({
     "step"    : "0/1/2/3/6/12/24",    # small subset of steps (explicit values)
     "levtype" : "sfc",
     "param"   : "228.128",            # tp only
-    "area"    : "34/89/7/112",
-    "grid"    : "0.1/0.1",
+    # "area"    : "34/89/7/112",
+    # "grid"    : "0.1/0.1",
 }, str(outfile))
 
 print(f"Done → {outfile}  ({outfile.stat().st_size / 1e6:.1f} MB)")
