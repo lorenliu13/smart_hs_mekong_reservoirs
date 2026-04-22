@@ -12,4 +12,4 @@
 module load Anaconda3
 conda activate $DATA/py311
 
-python test_tp_oneday.py
+python -u test_tp_oneday.py
