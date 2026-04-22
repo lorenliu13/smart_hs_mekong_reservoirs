@@ -10,6 +10,6 @@
 #SBATCH --partition=short
 
 module load Anaconda3
-source activate $DATA/py311
+conda activate $DATA/py311
 
 python test_tp_oneday.py
