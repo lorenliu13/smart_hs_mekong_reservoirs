@@ -9,7 +9,6 @@ Variables : total_precipitation, 2m_temperature, 2m_dewpoint_temperature,
             (mirrors the 12 variables in the ECMWF IFS HRES download)
 Period    : 2023-01-01 to 2025-12-31
 Region    : Mekong River Basin  (N=34, W=89, S=7, E=112)
-Grid      : 0.1° × 0.1°  (ERA5-Land native resolution)
 Format    : NetCDF, one file per variable per month
 Output    : OUTDIR/YYYY-MM/era5land_mekong_YYYY-MM_<var>.nc
 
@@ -57,8 +56,6 @@ VARIABLES = {
 
 # N/W/S/E — full Mekong River Basin (same as HRES download)
 AREA = [34, 89, 7, 112]
-
-GRID = [0.1, 0.1]
 
 # All 24 hours for daily aggregation in post-processing
 HOURS = [f"{h:02d}:00" for h in range(24)]
@@ -120,7 +117,6 @@ def download_variable(
             "day"         : days,
             "time"        : HOURS,
             "area"        : AREA,   # [N, W, S, E]
-            "grid"        : GRID,
             "format"      : "netcdf",
         },
         str(outfile),
