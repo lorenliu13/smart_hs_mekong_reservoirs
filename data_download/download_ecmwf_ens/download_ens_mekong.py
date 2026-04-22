@@ -78,7 +78,7 @@ STEPS = (
 
 # Default perturbed member range (overridable via --pf-start / --pf-end)
 DEFAULT_PF_START = 1
-DEFAULT_PF_END   = 1
+DEFAULT_PF_END   = 50
 
 # Set to False to skip the control forecast (cf) download
 DEFAULT_DOWNLOAD_CF = True
@@ -86,8 +86,8 @@ DEFAULT_DOWNLOAD_CF = True
 # Default output directory (overridable via --outdir)
 START_YEAR  = 2023
 START_MONTH = 1
-END_YEAR    = 2023
-END_MONTH   = 1
+END_YEAR    = 2026
+END_MONTH   = 3
 
 # Cluster path (uncomment the local path for testing on a local machine):
 OUTDIR = Path("/data/ouce-grit/cenv1160/smart_hs/raw_data/ecmwf_ifs/ens")
