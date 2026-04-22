@@ -59,17 +59,18 @@ VARIABLES = {
 
 ALL_PARAMS = "/".join(VARIABLES.values())
 
-AREA  = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
-GRID  = "0.1/0.1"
+# AREA  = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
+# GRID  = "0.1/0.1"
 
-STEPS = (
-    "0/6/12/18/24/30/36/42/48/54/60/66/72/78/84/90/96/102/108/114/120"
-    "/126/132/138/144/150/156/162/168/174/180/186/192/198/204/210/216/222/228/234/240"
-)
+# STEPS = (
+#     "0/6/12/18/24/30/36/42/48/54/60/66/72/78/84/90/96/102/108/114/120"
+#     "/126/132/138/144/150/156/162/168/174/180/186/192/198/204/210/216/222/228/234/240"
+# )
+STEPS = ('0')
 
 # ENS real-time has 50 perturbed members (members 1–50)
-PF_NUMBERS = "/".join(str(n) for n in range(1, 51))  # "1/2/.../50"
-# PF_NUMBERS = "1"
+# PF_NUMBERS = "/".join(str(n) for n in range(1, 51))  # "1/2/.../50"
+PF_NUMBERS = "1"
 
 START_YEAR  = 2023
 START_MONTH = 1
@@ -111,11 +112,10 @@ def build_mars_list_request(date_str: str, params: str = ALL_PARAMS) -> str:
   step    = {STEPS},
   levtype = sfc,
   param   = {params},
-  area    = {AREA},
-  grid    = {GRID},
   output  = cost
 """
 
+# #   area    = {AREA},
 
 # ---------------------------------------------------------------------------
 # Executor
@@ -205,7 +205,7 @@ def main() -> None:
     print(f"[INFO]  Stream     : enfo  (IFS ENS real-time, available every day)")
     print(f"[INFO]  Type       : pf  Members: 1–50")
     print(f"[INFO]  Variable(s): {var_label}")
-    print(f"[INFO]  Region     : {AREA}  Grid: {GRID}")
+    # print(f"[INFO]  Region     : {AREA}  Grid: {GRID}")
     print(f"[INFO]  Steps      : 0–240h (6-hourly, 41 steps)")
 
     if args.mode == "date":
