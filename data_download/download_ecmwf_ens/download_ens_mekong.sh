@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=ens_download          # Name of your job
-#SBATCH --output=ens_download.out        # Standard output file
-#SBATCH --error=ens_download.err         # Standard error file
+#SBATCH --output=ens_download_2023_2026.out        # Standard output file
+#SBATCH --error=ens_download_2023_2026.err         # Standard error file
 #SBATCH --nodes=1                         # Request one node
 #SBATCH --ntasks=1                        # Request one task
 #SBATCH --cpus-per-task=1                # Request 1 CPUs per task
