@@ -84,7 +84,7 @@ DEFAULT_DOWNLOAD_CF = True
 
 # Default output directory (overridable via --outdir)
 START_YEAR  = 2023
-START_MONTH = 1
+START_MONTH = 12
 END_YEAR    = 2026
 END_MONTH   = 3
 
