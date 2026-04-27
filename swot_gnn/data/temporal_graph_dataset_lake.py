@@ -3,7 +3,7 @@ Temporal graph dataset for lake-based SWOT-GNN multi-step forecasting.
 
 Each training sample is indexed by an ECMWF init_date and contains:
   - History window (seq_len days): ERA5-Land climate + SWOT WSE features
-  - Forecast window (forecast_horizon days): ECMWF IFS climate + zeroed SWOT features
+  - Forecast window (forecast_horizon days): ECMWF IFS climate + carried-forward SWOT state
   - Labels: WSE at init_date + days 0..forecast_horizon-1 (shape: n_lakes × forecast_horizon)
   - Mask:   obs_mask at those forecast dates
 
@@ -49,8 +49,10 @@ Data flow:
     │                                                                      │
     │  t=0 ──────────────── t=29 │ t=30 ────── t=34                        │
     │  ◄── ERA5 history (30d) ──► │ ◄─ ECMWF forecast (5d) ──►             │
-    │  SWOT features (8) filled   │ SWOT features (6) zeroed out           │
-    │  ERA5 climate  (13) filled  │ DOY sin/cos (2) kept                   │
+    │  SWOT features (8) filled   │ obs_mask (0) = 0                       │
+    │  ERA5 climate  (13) filled  │ WSE/unc/area (1-4) carried forward     │
+    │                             │ days_since_obs (5) increments +1/day  │
+    │                             │ DOY sin/cos (6-7) kept                 │
     │                             │ ECMWF climate  (13) filled             │
     │                                                                      │
     │  data_list : list[PyG Data] × (seq_len+forecast_horizon)             │
@@ -112,9 +114,12 @@ ECMWF_CLIMATE_VARS: List[str] = ERA5_CLIMATE_VARS
 SWOT_DIM:    int = 8   # indices 0–7
 CLIMATE_DIM: int = 13  # indices 8–20
 
-# Feature indices zeroed in forecast mode (future timesteps have no SWOT data).
-# Indices 6–7 (doy_sin/cos) are kept because the calendar date is still known.
-WSE_LAKE_DYNAMIC_INDICES: List[int] = [0, 1, 2, 3, 4, 5]
+# Only obs_mask (0) is zeroed in the forecast window — no new SWOT pass has occurred.
+# Features 1–4 (latest_wse, latest_wse_u, latest_wse_std, latest_area_total) are
+# carried forward unchanged from the last history timestep.
+# Feature 5 (days_since_last_obs) increments by +1 per forecast day.
+# Indices 6–7 (doy_sin/cos) are recomputed from the forecast valid_date.
+WSE_LAKE_DYNAMIC_INDICES: List[int] = [0]  # only obs_mask is zeroed
 
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -237,6 +242,8 @@ class TemporalGraphDatasetLake(Dataset):
         seq_len: int = 30,                  # ERA5 history window length in days
         forecast_horizon: int = 10,         # ECMWF forecast window length in days
         indices: Optional[np.ndarray] = None, # Optional pre-computed array of valid ECMWF init_date positions (train/val/test split
+        norm_dyn_mean: Optional[np.ndarray] = None,  # (n_features,) dynamic feature means (for days_since_last_obs decode)
+        norm_dyn_std: Optional[np.ndarray] = None,   # (n_features,) dynamic feature stds
     ):
         """
         Args:
@@ -268,6 +275,8 @@ class TemporalGraphDatasetLake(Dataset):
         self.seq_len         = seq_len
         self.forecast_horizon = forecast_horizon
         self.n_lakes         = era5_dynamic.shape[0]
+        self.norm_dyn_mean   = norm_dyn_mean
+        self.norm_dyn_std    = norm_dyn_std
 
         # O(1) date → index lookup — avoids repeated linear scans during __getitem__
         # {date: i} maps ERA5 dates to their position in the era5_dynamic array, which is needed to efficiently extract the history window and label values for each init_date during __getitem__.
@@ -333,34 +342,45 @@ class TemporalGraphDatasetLake(Dataset):
         # shape: (n_lakes, seq_len, SWOT_DIM+CLIMATE_DIM=21)
 
         # ── ECMWF forecast window (timesteps seq_len to seq_len+forecast_horizon-1) ──
-        # No observed SWOT data exists for future timesteps, so SWOT-derived slots
-        # are zeroed out. Only DOY encoding and ECMWF climate are populated.
-        #
         # Feature layout within each forecast timestep (total 21 dims):
-        #   [0] obs_mask            → 0 (no observation available in future)
-        #   [1] latest_wse          → 0 (unknown)
-        #   [2] latest_wse_u        → 0
-        #   [3] latest_wse_std      → 0
-        #   [4] latest_area_total   → 0
-        #   [5] days_since_last_obs → 0 (not meaningful in forecast window)
-        #   [6] doy_sin             → computed from valid_date dayofyear
-        #   [7] doy_cos             → computed from valid_date dayofyear
+        #   [0] obs_mask            → 0 (no new SWOT pass in the future)
+        #   [1] latest_wse          → carried forward from last history timestep
+        #   [2] latest_wse_u        → carried forward
+        #   [3] latest_wse_std      → carried forward
+        #   [4] latest_area_total   → carried forward
+        #   [5] days_since_last_obs → increments +1/day from last history value
+        #   [6] doy_sin             → computed from forecast valid_date
+        #   [7] doy_cos             → computed from forecast valid_date
         #   [8–20]                  → ECMWF climate variables (13 vars, offset by SWOT_DIM=8)
         ecmwf_slice = self.ecmwf_forecast[:, j, :self.forecast_horizon, :]  # (n_lakes, forecast_horizon, CLIMATE_DIM)
+        last_hist = history[:, -1, :]  # (n_lakes, 21) — latest SWOT state
 
         fc_block = np.zeros(
             (self.n_lakes, self.forecast_horizon, SWOT_DIM + CLIMATE_DIM), dtype=np.float32
         )
-        # Fill DOY encoding for each forecast valid_date.
-        # Indices 6/7 (doy_sin/cos) match their position in the ERA5 SWOT block,
-        # keeping the feature layout identical across history and forecast timesteps.
-        for d in range(self.forecast_horizon):
-            valid_date = init_date + pd.Timedelta(days=d)
-            doy = valid_date.dayofyear
-            fc_block[:, d, 6] = float(np.sin(2 * np.pi * doy / 365.25))
-            fc_block[:, d, 7] = float(np.cos(2 * np.pi * doy / 365.25))
 
-        # Paste ECMWF climate into the trailing CLIMATE_DIM slots (after SWOT_DIM=8 zeros)
+        # Carry forward latest WSE state features (1–4) unchanged across all forecast days
+        fc_block[:, :, 1:5] = last_hist[:, np.newaxis, 1:5]
+
+        # days_since_last_obs (5): decode from log1p+z-score, add +1/day, re-encode
+        if self.norm_dyn_mean is not None and self.norm_dyn_std is not None:
+            mean5, std5 = float(self.norm_dyn_mean[5]), float(self.norm_dyn_std[5])
+            raw5 = np.expm1(last_hist[:, 5] * std5 + mean5)  # (n_lakes,) raw days
+            increments = np.arange(1, self.forecast_horizon + 1, dtype=np.float32)
+            raw_fc = raw5[:, np.newaxis] + increments[np.newaxis, :]  # (n_lakes, forecast_horizon)
+            fc_block[:, :, 5] = (np.log1p(np.clip(raw_fc, 0, None)) - mean5) / std5
+        else:
+            fc_block[:, :, 5] = last_hist[:, np.newaxis, 5]
+
+        # DOY encoding (6–7): vectorised over all forecast days
+        doys = np.array(
+            [(init_date + pd.Timedelta(days=d)).dayofyear for d in range(self.forecast_horizon)],
+            dtype=np.float32,
+        )
+        fc_block[:, :, 6] = np.sin(2 * np.pi * doys / 365.25)[np.newaxis, :]
+        fc_block[:, :, 7] = np.cos(2 * np.pi * doys / 365.25)[np.newaxis, :]
+
+        # Paste ECMWF climate into the trailing CLIMATE_DIM slots (after SWOT_DIM=8)
         fc_block[:, :, SWOT_DIM:] = ecmwf_slice
         # shape: (n_lakes, forecast_horizon, SWOT_DIM+CLIMATE_DIM=21)
 
@@ -433,6 +453,8 @@ class SingleLeadDatasetLake(Dataset):
         seq_len: int = 30,
         forecast_horizon: int = 10,
         samples: Optional[np.ndarray] = None,  # (N, 2): columns [ecmwf_j, lead_day]
+        norm_dyn_mean: Optional[np.ndarray] = None,
+        norm_dyn_std: Optional[np.ndarray] = None,
     ):
         if not HAS_PYG:
             raise ImportError("PyTorch Geometric is required: pip install torch-geometric")
@@ -451,6 +473,8 @@ class SingleLeadDatasetLake(Dataset):
         self.seq_len          = seq_len
         self.forecast_horizon = forecast_horizon
         self.n_lakes          = era5_dynamic.shape[0]
+        self.norm_dyn_mean    = norm_dyn_mean
+        self.norm_dyn_std     = norm_dyn_std
 
         self.era5_date_to_idx  = {d: i for i, d in enumerate(era5_dates)}
         self.ecmwf_date_to_idx = {d: j for j, d in enumerate(ecmwf_init_dates)}
@@ -479,14 +503,25 @@ class SingleLeadDatasetLake(Dataset):
 
         # ECMWF forecast window
         ecmwf_slice = self.ecmwf_forecast[:, ecmwf_j, :self.forecast_horizon, :]
+        last_hist = history[:, -1, :]  # (n_lakes, 21) — latest SWOT state
         fc_block = np.zeros(
             (self.n_lakes, self.forecast_horizon, SWOT_DIM + CLIMATE_DIM), dtype=np.float32
         )
-        for d in range(self.forecast_horizon):
-            valid_date = init_date + pd.Timedelta(days=d)
-            doy = valid_date.dayofyear
-            fc_block[:, d, 6] = float(np.sin(2 * np.pi * doy / 365.25))
-            fc_block[:, d, 7] = float(np.cos(2 * np.pi * doy / 365.25))
+        fc_block[:, :, 1:5] = last_hist[:, np.newaxis, 1:5]
+        if self.norm_dyn_mean is not None and self.norm_dyn_std is not None:
+            mean5, std5 = float(self.norm_dyn_mean[5]), float(self.norm_dyn_std[5])
+            raw5 = np.expm1(last_hist[:, 5] * std5 + mean5)
+            increments = np.arange(1, self.forecast_horizon + 1, dtype=np.float32)
+            raw_fc = raw5[:, np.newaxis] + increments[np.newaxis, :]
+            fc_block[:, :, 5] = (np.log1p(np.clip(raw_fc, 0, None)) - mean5) / std5
+        else:
+            fc_block[:, :, 5] = last_hist[:, np.newaxis, 5]
+        doys = np.array(
+            [(init_date + pd.Timedelta(days=d)).dayofyear for d in range(self.forecast_horizon)],
+            dtype=np.float32,
+        )
+        fc_block[:, :, 6] = np.sin(2 * np.pi * doys / 365.25)[np.newaxis, :]
+        fc_block[:, :, 7] = np.cos(2 * np.pi * doys / 365.25)[np.newaxis, :]
         fc_block[:, :, SWOT_DIM:] = ecmwf_slice
 
         seq_features = np.concatenate([history, fc_block], axis=1)
@@ -780,6 +815,8 @@ def build_temporal_dataset_from_lake_datacubes(
         lake_ids=lake_ids_out,
         seq_len=seq_len,
         forecast_horizon=forecast_horizon,
+        norm_dyn_mean=dyn_mean,
+        norm_dyn_std=dyn_std,
     )
     train_ds = TemporalGraphDatasetLake(**shared_kwargs, indices=train_idx)
     val_ds   = TemporalGraphDatasetLake(**shared_kwargs, indices=val_idx)
@@ -1086,6 +1123,8 @@ def build_spatial_cv_fold(
         lake_ids=lake_ids_out,
         seq_len=seq_len,
         forecast_horizon=forecast_horizon,
+        norm_dyn_mean=dyn_mean,
+        norm_dyn_std=dyn_std,
     )
     train_ds = TemporalGraphDatasetLake(**shared_kwargs, indices=train_idx)
     val_ds   = TemporalGraphDatasetLake(**shared_kwargs, indices=val_idx)

@@ -2,7 +2,7 @@
 LSTM-only baseline for multi-day lake WSE forecasting.
 
 Architecture mirrors SWOT-GNN (InputEncoder → StepTypeEmbedding → LSTMBlock × N → ForecastHead)
-but omits the GraphGPS spatial propagation step entirely.  Each lake is
+but omits the GraphGPS spatial propagation step entirely. Each lake is
 processed independently; no message passing between neighbours.
 
 Use this model as a benchmark to isolate the contribution of graph
@@ -22,7 +22,7 @@ from .swot_gnn import InputEncoder, StaticEncoder, ForecastHead
 
 class LSTMBlock(nn.Module):
     """
-    Temporal-only block: bidirectional 2-layer LSTM with static feature injection.
+    Temporal-only block: 2-layer LSTM with static feature injection.
 
     Mirrors the temporal half of STBlock (models/st_block.py) but removes the
     GraphGPS spatial step.  Each node (lake) is processed independently along
@@ -38,14 +38,12 @@ class LSTMBlock(nn.Module):
     ):
         super().__init__()
         self.static_embed_dim = static_embed_dim
-        # Bi-LSTM input: dynamic features + static embedding (concatenated per timestep)
         lstm_input_size = in_dim + static_embed_dim
         self.lstm = nn.LSTM(
             input_size=lstm_input_size,
-            hidden_size=hidden_dim // 2,   # concat of both directions → hidden_dim
+            hidden_size=hidden_dim,
             num_layers=2,
             batch_first=True,
-            bidirectional=True,
             dropout=dropout,
         )
         self.lstm_dropout = nn.Dropout(dropout)

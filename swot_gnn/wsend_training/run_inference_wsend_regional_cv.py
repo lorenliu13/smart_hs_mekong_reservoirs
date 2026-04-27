@@ -165,9 +165,13 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
 
     Supports forecast_horizon >= 1. Each row records:
         lake_id, init_date, forecast_date, lead_day, pred_norm, target_norm,
-        pred_std_norm (NaN for deterministic / point models), is_test_lake
+        pred_std_norm (NaN for deterministic / point models), is_test_lake,
+        days_since_last_swot
 
     is_test_lake is True for regionally held-out test lakes, False for train lakes.
+
+    days_since_last_swot: (forecast_date - last SWOT obs date before init_date).days
+        per lake.  NaN for lakes with no prior SWOT observation in the record.
 
     Inputs:
         ds: TemporalGraphDatasetLake with spatial masks (train_ds, val_ds, test_ds
@@ -181,8 +185,20 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
 
     Outputs:
         DataFrame with columns: lake_id, init_date, forecast_date, lead_day,
-            pred_norm, target_norm, pred_std_norm, is_test_lake
+            pred_norm, target_norm, pred_std_norm, is_test_lake, days_since_last_swot
     """
+    # Precompute running "last obs era5 index" for each lake at every era5 date.
+    # last_obs_era5_idx[lake_i, t] = era5 index of the most recent SWOT obs
+    # up to and including date t, or -1 if no obs has occurred yet.
+    obs_mask_np = ds.obs_mask                          # (n_lakes, n_era5_dates)
+    n_lk, n_dt  = obs_mask_np.shape
+    last_obs_era5_idx = np.full((n_lk, n_dt), -1, dtype=np.int32)
+    last_obs_era5_idx[:, 0] = np.where(obs_mask_np[:, 0] > 0, 0, -1)
+    for _t in range(1, n_dt):
+        last_obs_era5_idx[:, _t] = np.where(
+            obs_mask_np[:, _t] > 0, _t, last_obs_era5_idx[:, _t - 1]
+        )
+
     records = []
     model.eval()
     with torch.no_grad():
@@ -214,23 +230,38 @@ def run_inference(ds, model, device, test_lake_ids: set, split_name=''):
             if std_cpu is not None and std_cpu.ndim == 1:
                 std_cpu = std_cpu[:, np.newaxis]
 
-            j         = int(ds.valid_starts[idx])
-            init_date = pd.Timestamp(ds.ecmwf_init_dates[j])
-            horizon   = labels_np.shape[1]
+            j             = int(ds.valid_starts[idx])
+            init_date     = pd.Timestamp(ds.ecmwf_init_dates[j])
+            last_hist_day = init_date - pd.Timedelta(days=1)
+            last_hist_idx = ds.era5_date_to_idx.get(last_hist_day)
+            horizon       = labels_np.shape[1]
+
+            # Last SWOT obs era5 index for each lake up to the history boundary
+            last_obs_per_lake = (
+                last_obs_era5_idx[:, last_hist_idx]
+                if last_hist_idx is not None
+                else np.full(n_lk, -1, dtype=np.int32)
+            )
 
             for d in range(horizon):
                 forecast_date = init_date + pd.Timedelta(days=d)
                 for lake_i, lake_id in enumerate(ds.lake_ids):
                     if mask_np[lake_i, d] > 0:
+                        loi = int(last_obs_per_lake[lake_i])
+                        if loi >= 0:
+                            days_since_swot = (forecast_date - ds.era5_dates[loi]).days
+                        else:
+                            days_since_swot = float('nan')
                         records.append({
-                            'lake_id'      : int(lake_id),
-                            'init_date'    : init_date,
-                            'forecast_date': forecast_date,
-                            'lead_day'     : d,
-                            'pred_norm'    : float(mean_cpu[lake_i, d]),
-                            'target_norm'  : float(labels_np[lake_i, d]),
-                            'pred_std_norm': float(std_cpu[lake_i, d]) if std_cpu is not None else float('nan'),
-                            'is_test_lake' : int(lake_id) in test_lake_ids,
+                            'lake_id'             : int(lake_id),
+                            'init_date'           : init_date,
+                            'forecast_date'       : forecast_date,
+                            'lead_day'            : d,
+                            'pred_norm'           : float(mean_cpu[lake_i, d]),
+                            'target_norm'         : float(labels_np[lake_i, d]),
+                            'pred_std_norm'       : float(std_cpu[lake_i, d]) if std_cpu is not None else float('nan'),
+                            'is_test_lake'        : int(lake_id) in test_lake_ids,
+                            'days_since_last_swot': days_since_swot,
                         })
 
     df = pd.DataFrame(records)
@@ -532,10 +563,10 @@ def main():
     col_order = [
         "lake_id", "is_test_lake", "init_date", "forecast_date", "lead_day",
         "pred_norm", "target_norm", "pred_m", "target_m",
-        "pred_std_norm", "pred_std_m",
+        "pred_std_norm", "pred_std_m", "days_since_last_swot",
     ]
     # pred_std_norm / pred_std_m are NaN for deterministic models; keep columns consistent
-    for col in ("pred_std_norm", "pred_std_m"):
+    for col in ("pred_std_norm", "pred_std_m", "days_since_last_swot"):
         for df in (train_df, val_df, test_df):
             if col not in df.columns:
                 df[col] = float("nan")
