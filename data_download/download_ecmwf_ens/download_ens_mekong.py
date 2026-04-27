@@ -77,7 +77,7 @@ STEPS = (
 
 # Default perturbed member range (overridable via --pf-start / --pf-end)
 DEFAULT_PF_START = 1
-DEFAULT_PF_END   = 10
+DEFAULT_PF_END   = 50
 
 # Set to False to skip the control forecast (cf) download
 DEFAULT_DOWNLOAD_CF = True

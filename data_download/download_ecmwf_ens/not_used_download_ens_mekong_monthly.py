@@ -1,4 +1,9 @@
 """
+NOT USED — downloading all dates in a month in a single MARS request is not
+recommended: a single failure aborts the entire month and the large request
+can time out or be rejected by the MARS queue.  Use download_ens_mekong.py
+instead, which submits one request per day and is more robust.
+
 Download ECMWF IFS ENS 0-15 day forecasts for the Mekong River Basin.
 
 Variables: tp, 2t, 2d, sp, 10u, 10v, ssrd, strd, sf, sd, swvl1, swvl2, swvl3, swvl4
