@@ -69,13 +69,14 @@ STEPS = (
 
 # ENS real-time has 50 perturbed members (members 1–50)
 # PF_NUMBERS = "/".join(str(n) for n in range(1, 51))  # "1/2/.../50"
-# PF_NUMBERS = "1"
-PF_NUMBERS = "/".join(str(n) for n in range(1, 51))
+PF_NUMBERS = "1"
+# PF_NUMBERS = "/".join(str(n) for n in range(1, 51))
+# PF_NUMBERS = "1/2/3/4/5/6/7/8/9/10"  # for testing — adjust as needed
 
 START_YEAR  = 2023
-START_MONTH = 1
+START_MONTH = 12
 END_YEAR    = 2023
-END_MONTH   = 1
+END_MONTH   = 12
 
 OUTDIR = Path("./file_size_check_ens_enfo")
 
@@ -100,7 +101,10 @@ def all_days_in_range(start_year: int, start_month: int,
 # ---------------------------------------------------------------------------
 
 def build_mars_list_request(date_str: str, params: str = ALL_PARAMS) -> str:
-    """Return a MARS list/cost request string for IFS ENS (enfo) pf."""
+    """Return a MARS list/cost request string for IFS ENS (enfo) pf.
+
+    date_str can be a single date or a '/'-joined list of dates.
+    """
     return f"""list,
   class   = od,
   expver  = 1,
@@ -122,15 +126,27 @@ def build_mars_list_request(date_str: str, params: str = ALL_PARAMS) -> str:
 # Executor
 # ---------------------------------------------------------------------------
 
+def _pf_label(pf_numbers: str) -> str:
+    """Return a compact pf-member label: '1-50' for a range, or the number itself."""
+    parts = pf_numbers.split("/")
+    return f"{parts[0]}-{parts[-1]}" if len(parts) > 1 else parts[0]
+
+
 def _run_list(server: ECMWFService, date_str: str, outdir: Path,
-              params: str = ALL_PARAMS, var_label: str = "allvars") -> None:
-    """Execute one MARS list/cost request and write the result."""
-    safe_date = date_str.replace("-", "")
-    list_file = outdir / f"ens_enfo_{safe_date}_pf_{var_label}_cost.list"
+              params: str = ALL_PARAMS, var_label: str = "allvars",
+              file_label: str | None = None) -> None:
+    """Execute one MARS list/cost request and write the result.
+
+    file_label overrides the date portion in the output filename (e.g. '202312'
+    for a monthly bulk request). Falls back to a sanitised date_str.
+    """
+    pf_lbl = _pf_label(PF_NUMBERS)
+    label = file_label if file_label else date_str.replace("-", "")
+    list_file = outdir / f"ens_enfo_{label}_pf{pf_lbl}_{var_label}_cost.list"
     req = build_mars_list_request(date_str, params)
 
-    print(f"\n[LIST]  {safe_date} pf  →  {list_file}")
-    print(f"[INFO]  Date       : {date_str}")
+    print(f"\n[LIST]  {label} pf  →  {list_file}")
+    print(f"[INFO]  Date(s)    : {date_str[:60]}{'…' if len(date_str) > 60 else ''}")
     print(f"[INFO]  Params     : {params}")
     print("-" * 60)
     print(req)
@@ -144,27 +160,40 @@ def _run_list(server: ECMWFService, date_str: str, outdir: Path,
 # Mode functions
 # ---------------------------------------------------------------------------
 
+def _months_in_range(start_year: int, start_month: int,
+                     end_year: int, end_month: int):
+    """Yield (year, month) tuples covering the given inclusive month range."""
+    y, m = start_year, start_month
+    while (y, m) <= (end_year, end_month):
+        yield y, m
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+
 def examine_range(server: ECMWFService,
                   start_year: int, start_month: int,
                   end_year: int,   end_month: int,
                   outdir: Path,
                   var_filter: str | None = None) -> None:
-    """Iterate all calendar days over a month range (enfo is available every day).
+    """One bulk MARS list/cost request per month, covering all days in that month.
 
     If var_filter is given, only that variable is requested; otherwise all variables.
     """
     params    = VARIABLES[var_filter] if var_filter else ALL_PARAMS
     var_label = var_filter if var_filter else "allvars"
 
-    all_dates = list(all_days_in_range(start_year, start_month, end_year, end_month))
-    total = len(all_dates)
-    print(f"\n[MODE]  range  —  {start_year}-{start_month:02d} → {end_year}-{end_month:02d}")
-    print(f"[INFO]  {total} day(s), variable: {var_label}")
+    months = list(_months_in_range(start_year, start_month, end_year, end_month))
+    print(f"\n[MODE]  range (bulk-by-month)  —  {start_year}-{start_month:02d} → {end_year}-{end_month:02d}")
+    print(f"[INFO]  {len(months)} month(s), variable: {var_label}")
 
-    for i, d in enumerate(all_dates, 1):
-        date_str = d.strftime("%Y-%m-%d")
-        print(f"\n[DATE]  {date_str}  ({i}/{total})")
-        _run_list(server, date_str, outdir, params, var_label)
+    for i, (y, m) in enumerate(months, 1):
+        last_day = calendar.monthrange(y, m)[1]
+        days = [date(y, m, d).strftime("%Y-%m-%d") for d in range(1, last_day + 1)]
+        date_str   = "/".join(days)          # all days joined for MARS
+        file_label = f"{y}{m:02d}"           # e.g. 202312
+        print(f"\n[MONTH] {y}-{m:02d}  ({i}/{len(months)})  —  {len(days)} days")
+        _run_list(server, date_str, outdir, params, var_label, file_label=file_label)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +233,7 @@ def main() -> None:
     server = ECMWFService("mars")
     print("[INFO]  Connected to ECMWF MARS server.")
     print(f"[INFO]  Stream     : enfo  (IFS ENS real-time, available every day)")
-    print(f"[INFO]  Type       : pf  Members: 1–50")
+    print(f"[INFO]  Type       : pf  Members: {_pf_label(PF_NUMBERS)}")
     print(f"[INFO]  Variable(s): {var_label}")
     # print(f"[INFO]  Region     : {AREA}  Grid: {GRID}")
     print(f"[INFO]  Steps      : {STEPS}")

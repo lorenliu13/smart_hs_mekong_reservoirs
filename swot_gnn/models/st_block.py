@@ -1,9 +1,9 @@
 """
 ST-Block: Spatio-Temporal block for SWOT-GNN.
-Processes (1) Temporal: bi-LSTM over time per node, (2) Spatial: GraphGPS over graph per timestep.
+Processes (1) Temporal: LSTM over time per node, (2) Spatial: GraphGPS over graph per timestep.
 Order: temporal first, then spatial at each timestep.
 
-Static features are concatenated as input features to the bi-LSTM (every timestep).
+Static features are concatenated as input features to the LSTM (every timestep).
 The GraphGPS stack receives only the LSTM hidden states.
 """
 import torch
@@ -15,7 +15,7 @@ from .graph_gps_layer import GraphGPSLayer
 
 class STBlock(nn.Module):
     """
-    ST-Block: (1) Temporal processing via bi-LSTM, (2) Spatial processing via GraphGPS.
+    ST-Block: (1) Temporal processing via LSTM, (2) Spatial processing via GraphGPS.
     Each node gets a temporal sequence -> LSTM encodes it -> GraphGPS propagates across graph
     at each timestep. Output is full (num_nodes, seq_len, hidden_dim) for next block.
 
@@ -34,14 +34,14 @@ class STBlock(nn.Module):
     ):
         super().__init__()
         self.static_embed_dim = static_embed_dim
-        # Bi-LSTM input: dynamic features + static embedding (concatenated per timestep)
+        # LSTM input: dynamic features + static embedding (concatenated per timestep)
         lstm_input_size = in_dim + static_embed_dim
         self.lstm = nn.LSTM(
             input_size=lstm_input_size,
-            hidden_size=hidden_dim // 2,
+            hidden_size=hidden_dim,
             num_layers=2,
             batch_first=True,
-            bidirectional=True,
+            bidirectional=False,
             dropout=dropout,
         )
         self.lstm_dropout = nn.Dropout(dropout)
@@ -76,8 +76,8 @@ class STBlock(nn.Module):
         """
         num_nodes, seq_len, _ = x.size()
 
-        # Step 1: Temporal - concatenate static to every timestep, then run bi-LSTM
-        # The bi-LSTM treats each node independently as a batch item (batch_first=True,
+        # Step 1: Temporal - concatenate static to every timestep, then run LSTM
+        # The LSTM treats each node independently as a batch item (batch_first=True,
         # so num_nodes acts as the batch dimension). It processes (seq_len, lstm_input_size)
         # and outputs (seq_len, hidden_dim).
         if static is not None and self.static_embed_dim > 0:
