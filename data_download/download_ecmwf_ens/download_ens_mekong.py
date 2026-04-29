@@ -63,7 +63,7 @@ VARIABLES = {
 }
 
 AREA = "34/89/7/112"   # N/W/S/E — full Mekong River Basin
-# GRID = "0.1/0.1"       # ~11 km regular lat/lon, interpolated by MARS from ENS native ~18 km
+GRID = "0.1/0.1"       # ~11 km regular lat/lon, interpolated by MARS from ENS native ~18 km
 
 # All param codes joined for a single multi-param MARS request (MARS efficiency)
 ALL_PARAMS = "/".join(VARIABLES.values())
@@ -77,7 +77,7 @@ STEPS = (
 
 # Default perturbed member range (overridable via --pf-start / --pf-end)
 DEFAULT_PF_START = 1
-DEFAULT_PF_END   = 50
+DEFAULT_PF_END   = 10
 
 # Set to False to skip the control forecast (cf) download
 DEFAULT_DOWNLOAD_CF = True
@@ -118,6 +118,15 @@ def iter_days(start_year: int, start_month: int, end_year: int, end_month: int):
             last_day = calendar.monthrange(year, month)[1]
             for day in range(1, last_day + 1):
                 yield year, month, day
+
+
+def iter_days_from_months(months: list[str]):
+    """Yield (year, month, day) tuples for each YYYY-MM entry in months."""
+    for ym in months:
+        year, month = int(ym[:4]), int(ym[5:7])
+        last_day = calendar.monthrange(year, month)[1]
+        for day in range(1, last_day + 1):
+            yield year, month, day
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +176,7 @@ def download_day(server: ECMWFService, year: int, month: int, day: int,
         "levtype" : "sfc",    # surface fields
         "param"   : ALL_PARAMS,
         "area"    : AREA,
-        # "grid"    : GRID,     # optional: MARS will interpolate to this grid from ENS native ~18 km
+        "grid"    : GRID,
     }
 
     success = True
@@ -210,6 +219,9 @@ def download_day(server: ECMWFService, year: int, month: int, day: int,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download ECMWF IFS ENS forecasts.")
+    parser.add_argument("--months",       nargs="+", metavar="YYYY-MM",
+                        help="Download specific months only, e.g. --months 2025-03 2025-08 "
+                             "(overrides --start-year/month and --end-year/month)")
     parser.add_argument("--start-year",  type=int, default=START_YEAR)
     parser.add_argument("--start-month", type=int, default=START_MONTH)
     parser.add_argument("--end-year",    type=int, default=END_YEAR)
@@ -230,11 +242,16 @@ def main() -> None:
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
 
-    all_days = list(iter_days(args.start_year, args.start_month, args.end_year, args.end_month))
+    if args.months:
+        all_days = list(iter_days_from_months(args.months))
+        period_label = ", ".join(args.months)
+    else:
+        all_days = list(iter_days(args.start_year, args.start_month, args.end_year, args.end_month))
+        period_label = f"{args.start_year}-{args.start_month:02d} → {args.end_year}-{args.end_month:02d}"
     total_days = len(all_days)
 
     print(f"[INFO]  Output directory : {outdir}")
-    print(f"[INFO]  Period           : {args.start_year}-{args.start_month:02d} → {args.end_year}-{args.end_month:02d}  ({total_days} days)")
+    print(f"[INFO]  Period           : {period_label}  ({total_days} days)")
     print(f"[INFO]  Variables        : {', '.join(VARIABLES.keys())} (1 combined request/member/day)")
     cf_label = "skipped (--no-cf)" if args.no_cf else "yes"
     n_pf = args.pf_end - args.pf_start + 1
