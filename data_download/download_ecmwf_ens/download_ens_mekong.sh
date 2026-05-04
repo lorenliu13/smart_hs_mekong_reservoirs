@@ -14,4 +14,4 @@ module load Anaconda3
 conda activate $DATA/py311
 
 # Run the download script
-python -u download_ens_mekong.py --months 2025-03 2025-08
+python -u download_ens_mekong.py 
